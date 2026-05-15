@@ -228,6 +228,8 @@ Like gauntlet but simpler — winner always takes over, no falling.
 
 Each card shows: screenshot (with hover video preview), title, duration, rank, studio, performers, play count, current rating, tags, and a "Choose This Scene" button.
 
+Clicking the **screenshot/thumbnail** opens the scene in a new tab, allowing users to inspect the scene without losing their place in the battle.
+
 **Badges** (displayed over the screenshot):
 - Win streak: `🔥 X wins` (number)
 - Falling mode: `📍 Finding placement...` (string)

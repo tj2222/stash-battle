@@ -630,14 +630,9 @@
   // NAVIGATION
   // ============================================
 
-  // Navigate using React Router (preserves JS state)
+  // Open scene in a new tab
   function navigateToUrl(url) {
-    closeRankingModal();
-    
-    // Use History API + popstate event to trigger React Router navigation
-    const path = url.startsWith('/') ? url : new URL(url).pathname + new URL(url).search;
-    window.history.pushState({}, '', path);
-    window.dispatchEvent(new PopStateEvent('popstate', { state: {} }));
+    window.open(url, '_blank');
   }
 
   // ============================================
@@ -1801,7 +1796,7 @@
       body.addEventListener("click", handleChooseScene);
     });
 
-    // Attach click-to-open (for thumbnail only) - use React Router navigation
+    // Attach click-to-open (for thumbnail only) - opens in new tab
     comparisonArea.querySelectorAll(".pwr-scene-image-container").forEach((container) => {
       const sceneUrl = container.dataset.sceneUrl;
       
