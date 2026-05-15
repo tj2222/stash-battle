@@ -381,7 +381,7 @@
 /* Scene Tags */
 .pwr-tags-row {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   overflow: hidden;

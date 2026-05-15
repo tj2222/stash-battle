@@ -1626,7 +1626,7 @@
       ? scene.performers.map((p) => p.name).join(", ") 
       : "No performers";
     const studio = scene.studio ? scene.studio.name : "No studio";
-    const tags = scene.tags ? scene.tags.slice(0, 5).map((t) => t.name) : [];
+    const tags = scene.tags ? scene.tags.slice(0, 40).map((t) => t.name) : [];
     
     // Title fallback: title -> filename from path -> Scene ID
     let title = scene.title;
