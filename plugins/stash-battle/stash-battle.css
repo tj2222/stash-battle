@@ -743,3 +743,45 @@
   padding: 12px 30px;
   font-size: 1.1rem;
 }
+
+/* Rating Mode UI */
+.pwr-rating-mode-container {
+  transition: all 0.3s ease;
+}
+
+.pwr-mode-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pwr-swap-buttons {
+  animation: fadeIn 0.3s ease-out;
+}
+
+#pwr-swap-loading {
+  color: #00ccff;
+  font-weight: 500;
+}
+
+/* Spinner */
+.spinner-border {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  vertical-align: text-bottom;
+  border: .15em solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spinner-border .75s linear infinite;
+}
+
+.spinner-border-sm {
+  width: .75rem;
+  height: .75rem;
+  border-width: .1em;
+}
+
+@keyframes spinner-border {
+  to { transform: rotate(360deg); }
+}

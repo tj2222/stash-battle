@@ -45,6 +45,14 @@
   let shuffleFilterKey = null;      // Filter key to detect changes
   let removedSceneIds = new Set();  // Track scenes removed during this session (survives background refresh)
 
+  // Rating Mode state
+  let ratingModeState = {
+    countNative: 0,
+    countBattle: 0,
+    countLive: 0,
+    mode: 'loading' // 'loading', 'error', 'native', 'battle', 'fresh'
+  };
+
   // ============================================
   // SCENE CACHE (IndexedDB + Memory)
   // ============================================
@@ -170,7 +178,14 @@
         
         request.onsuccess = () => {
           memoryCache = { allScenes: null, filteredScenes: null, filterKey: null, timestamp: null };
-          console.log("[Stash Battle] ✅ All caches cleared (memory + IndexedDB)");
+          
+          // Reset shuffle state
+          shuffledFilteredScenes = [];
+          shuffleIndex = 0;
+          shuffleFilterKey = null;
+          removedSceneIds = new Set();
+          
+          console.log("[Stash Battle] ✅ All caches cleared (memory + IndexedDB + shuffle state)");
           resolve();
         };
         request.onerror = () => reject(request.error);
@@ -599,6 +614,228 @@
       throw new Error(result.errors[0].message);
     }
     return result.data;
+  }
+
+  async function getRatingModeCounts() {
+    const query = `
+      query GetRatingModeCounts {
+        nativeBackup: findScenes(scene_filter: { 
+          custom_fields: { field: "rating100_native", modifier: NOT_NULL, value: [] } 
+        }, filter: { per_page: 1 }) {
+          count
+        }
+        battleBackup: findScenes(scene_filter: { 
+          custom_fields: { field: "rating100_battle", modifier: NOT_NULL, value: [] } 
+        }, filter: { per_page: 1 }) {
+          count
+        }
+        liveRatings: findScenes(scene_filter: { 
+          rating100: { modifier: NOT_NULL, value: 0 } 
+        }, filter: { per_page: 1 }) {
+          count
+        }
+      }
+    `;
+    const data = await graphqlQuery(query);
+    return {
+      countNative: data.nativeBackup.count,
+      countBattle: data.battleBackup.count,
+      countLive: data.liveRatings.count
+    };
+  }
+
+  async function runPluginTask(taskId) {
+    const mutation = `
+      mutation RunPluginTask($plugin_id: ID!, $task_name: String) {
+        runPluginTask(plugin_id: $plugin_id, task_name: $task_name)
+      }
+    `;
+    return await graphqlQuery(mutation, {
+      plugin_id: "stash-battle",
+      task_name: taskId
+    });
+  }
+
+  async function pollJob(jobId) {
+    const query = `
+      query JobQueue {
+        jobQueue {
+          id
+          status
+          progress
+        }
+      }
+    `;
+    
+    let seenJob = false;
+
+    return new Promise((resolve, reject) => {
+      const interval = setInterval(async () => {
+        try {
+          const data = await graphqlQuery(query);
+          const jobs = data.jobQueue || [];
+          const job = jobs.find(j => j.id === jobId);
+          
+          if (!job) {
+            if (seenJob) {
+              console.log(`[Stash Battle] 🏁 Job ${jobId} no longer in queue, assuming finished.`);
+              clearInterval(interval);
+              resolve({ status: "FINISHED" });
+            }
+            return;
+          }
+          
+          seenJob = true;
+          
+          // Update progress in UI
+          const progressEl = document.getElementById("pwr-swap-progress");
+          if (progressEl && job.progress !== undefined) {
+             const percent = Math.round(job.progress * 100);
+             progressEl.innerText = `Swapping ratings... ${percent}%`;
+          }
+
+          if (job.status === "FINISHED") {
+            clearInterval(interval);
+            resolve(job);
+          } else if (job.status === "FAILED") {
+            clearInterval(interval);
+            reject(new Error("Job failed"));
+          }
+        } catch (e) {
+          clearInterval(interval);
+          reject(e);
+        }
+      }, 1000);
+    });
+  }
+
+  // ============================================
+  // RATING MODE LOGIC
+  // ============================================
+
+  async function startupModeCheck() {
+    try {
+      const counts = await getRatingModeCounts();
+      
+      let mode = 'fresh';
+      if (counts.countNative > 0 && counts.countBattle > 0) {
+        mode = 'error';
+      } else if (counts.countNative > 0) {
+        mode = 'battle';
+      } else if (counts.countBattle > 0) {
+        mode = 'native';
+      } else {
+        mode = 'fresh';
+      }
+      
+      ratingModeState = { ...counts, mode };
+      updateModeUI();
+    } catch (e) {
+      console.error("[Stash Battle] Startup mode check failed:", e);
+    }
+  }
+
+  function updateModeUI() {
+    const banner = document.getElementById("pwr-mode-banner");
+    const nativeBtn = document.getElementById("pwr-store-native-btn");
+    const battleBtn = document.getElementById("pwr-store-battle-btn");
+    const comparisonArea = document.getElementById("pwr-comparison-area");
+    const skipBtn = document.getElementById("pwr-skip-btn");
+
+    if (!banner) return;
+
+    // Reset visibility
+    nativeBtn.style.display = "none";
+    battleBtn.style.display = "none";
+    
+    // Enable controls by default
+    if (comparisonArea) comparisonArea.style.pointerEvents = "auto";
+    if (comparisonArea) comparisonArea.style.opacity = "1";
+    if (skipBtn) skipBtn.disabled = false;
+
+    switch (ratingModeState.mode) {
+      case 'error':
+        banner.innerHTML = "❌ <span style='color:#ff4d4d'>Inconsistent State Detected!</span> Both native and battle backups exist. Please resolve manually in Stash.";
+        if (comparisonArea) comparisonArea.style.pointerEvents = "none";
+        if (comparisonArea) comparisonArea.style.opacity = "0.5";
+        if (skipBtn) skipBtn.disabled = true;
+        break;
+
+      case 'battle':
+        banner.innerHTML = "✅ <span style='color:#4dff4d'>Battle Mode Active</span> (Native ratings stored)";
+        battleBtn.style.display = "block";
+        break;
+
+      case 'native':
+        banner.innerHTML = "⚖️ <span style='color:#ffcc00'>Native Ratings Active</span>. To start a battle, please store your native ratings first.";
+        nativeBtn.style.display = "block";
+        if (comparisonArea) comparisonArea.style.pointerEvents = "none";
+        if (comparisonArea) comparisonArea.style.opacity = "0.5";
+        if (skipBtn) skipBtn.disabled = true;
+        break;
+
+      case 'fresh':
+        if (ratingModeState.countLive === 0) {
+          banner.innerHTML = "👋 <span style='color:#00ccff'>Welcome!</span> Please rate at least one scene in Stash normally before beginning a battle.";
+          if (comparisonArea) comparisonArea.style.pointerEvents = "none";
+          if (comparisonArea) comparisonArea.style.opacity = "0.5";
+          if (skipBtn) skipBtn.disabled = true;
+        } else {
+          banner.innerHTML = "👋 <span style='color:#00ccff'>Welcome!</span> Please store your native ratings to begin your first battle session.";
+          nativeBtn.style.display = "block";
+          if (comparisonArea) comparisonArea.style.pointerEvents = "none";
+          if (comparisonArea) comparisonArea.style.opacity = "0.5";
+          if (skipBtn) skipBtn.disabled = true;
+        }
+        break;
+    }
+  }
+
+  async function handleSwap(mode) {
+    const banner = document.getElementById("pwr-mode-banner");
+    const swapButtons = document.getElementById("pwr-swap-buttons");
+    const loading = document.getElementById("pwr-swap-loading");
+    const nativeBtn = document.getElementById("pwr-store-native-btn");
+    const battleBtn = document.getElementById("pwr-store-battle-btn");
+
+    try {
+      // Show loading
+      nativeBtn.disabled = true;
+      battleBtn.disabled = true;
+      loading.style.display = "flex";
+      
+      const res = await runPluginTask(mode);
+      const jobId = res.runPluginTask;
+      
+      console.log(`[Stash Battle] 🚀 Started swap task: ${mode} (Job ID: ${jobId})`);
+      await pollJob(jobId);
+      
+      console.log("[Stash Battle] ✅ Swap task finished. Resetting state...");
+      
+      // Clear all state
+      await clearSceneCache();
+      clearState(); // Clear localStorage
+      
+      // Refresh mode state
+      await startupModeCheck();
+      
+      // Reload UI
+      const comparisonArea = document.getElementById("pwr-comparison-area");
+      if (comparisonArea) comparisonArea.innerHTML = '<div class="pwr-loading">Reloading scenes...</div>';
+      
+      // If we are now in battle mode, load a new pair
+      if (ratingModeState.mode === 'battle') {
+        loadNewPair();
+      }
+      
+    } catch (e) {
+      console.error("[Stash Battle] Swap failed:", e);
+      alert("Swap failed! Check server logs for details.");
+    } finally {
+      nativeBtn.disabled = false;
+      battleBtn.disabled = false;
+      loading.style.display = "none";
+    }
   }
 
   const SCENE_FRAGMENT = `
@@ -1729,8 +1966,23 @@
           <div class="pwr-opponents-toggle" style="margin-top:8px;">
             <label>
               <input type="checkbox" id="pwr-filter-opponents-checkbox" ${filterOpponents ? "checked" : ""}>
-               Use filtered scenes for both sides
+                Use filtered scenes for both sides
             </label>
+          </div>
+
+          <div class="pwr-rating-mode-container" style="margin-top: 16px; padding: 12px; border-radius: 8px; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1);">
+            <div id="pwr-mode-banner" class="pwr-mode-banner" style="font-size: 0.9em; font-weight: 500;">
+              <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+              Checking ratings state...
+            </div>
+            <div id="pwr-swap-buttons" class="pwr-swap-buttons" style="display: flex; gap: 8px; margin-top: 10px;">
+                <button id="pwr-store-native-btn" class="btn btn-primary btn-sm" style="display:none;">📥 Store Native, Load Battle</button>
+                <button id="pwr-store-battle-btn" class="btn btn-secondary btn-sm" style="display:none;">📤 Store Battle, Load Native</button>
+                <div id="pwr-swap-loading" style="display:none; font-size: 0.85em; align-items: center; gap: 8px;">
+                  <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                  <span id="pwr-swap-progress">Swapping ratings...</span>
+                </div>
+            </div>
           </div>
         </div>
 
@@ -2359,6 +2611,18 @@
         ${createMainUI()}
       </div>
     `;
+
+    // Initialize mode check
+    startupModeCheck();
+
+    // Attach swap button handlers
+    modal.addEventListener('click', (e) => {
+      if (e.target.id === 'pwr-store-native-btn') {
+        handleSwap('store_native_load_battle');
+      } else if (e.target.id === 'pwr-store-battle-btn') {
+        handleSwap('store_battle_load_native');
+      }
+    });
 
     document.body.appendChild(modal);
 

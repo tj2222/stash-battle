@@ -7,3 +7,18 @@ ui:
     - stash-battle.js
   css:
     - stash-battle.css
+
+exec:
+  - python3
+  - "{pluginDir}/stash-battle.py"
+interface: raw
+
+tasks:
+  - name: store_native_load_battle
+    description: "Swaps native scene ratings with stored battle points."
+    defaultArgs:
+      mode: store_native_load_battle
+  - name: store_battle_load_native
+    description: "Restores native scene ratings and stores current battle points."
+    defaultArgs:
+      mode: store_battle_load_native
