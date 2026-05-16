@@ -64,6 +64,10 @@
     filterKey: null,           // Current filter params for cache validation
     timestamp: null            // When cache was populated
   };
+  
+  // Track refresh state to prevent race conditions
+  let activeRefreshId = 0;
+  let activeRefreshControllers = new Set();
 
   // Open IndexedDB database
   function openCacheDB() {
@@ -168,8 +172,16 @@
 
   // Clear all cached scenes (for manual refresh)
   async function clearSceneCache() {
+    // Kill all active refreshes before clearing
+    if (activeRefreshControllers.size > 0) {
+      console.log(`[Stash Battle] 🛑 Killing ${activeRefreshControllers.size} active background refresh(es)...`);
+      activeRefreshControllers.forEach(controller => controller.abort());
+      activeRefreshControllers.clear();
+    }
+    activeRefreshId++;
+
     try {
-      console.log("[Stash Battle] 🗑️ Clearing all scene caches...");
+      console.log(`[Stash Battle] 🗑️ Clearing all scene caches (Session: ${activeRefreshId})...`);
       const db = await openCacheDB();
       return new Promise((resolve, reject) => {
         const transaction = db.transaction(CACHE_STORE_NAME, "readwrite");
@@ -225,9 +237,15 @@
   // Background refresh - fetch from network and update caches silently
   async function backgroundRefreshAllScenes() {
     const cacheKey = "all-scenes";
+    const refreshId = activeRefreshId;
+    
+    // Create new unique controller for this job
+    const controller = new AbortController();
+    const signal = controller.signal;
+    activeRefreshControllers.add(controller);
     
     try {
-      console.log("[Stash Battle] 🔄 Background refresh started (all scenes)...");
+      console.log(`[Stash Battle] 🔄 Background refresh started (Session: ${refreshId})...`);
       const startTime = Date.now();
       
       const scenesQuery = `
@@ -248,7 +266,13 @@
           direction: "DESC"
         },
         scene_filter: null
-      });
+      }, signal);
+      
+      // Safety check: Don't commit if refresh was aborted or session changed
+      if (signal.aborted || refreshId !== activeRefreshId) {
+        console.log(`[Stash Battle] ⚠️ Session ${refreshId} refresh aborted or superseded, discarding.`);
+        return;
+      }
       
       const scenes = result.findScenes.scenes || [];
       const count = result.findScenes.count || scenes.length;
@@ -269,7 +293,13 @@
       
       console.log(`[Stash Battle] ✅ Background refresh complete: ${scenes.length} scenes in ${fetchTime}ms`);
     } catch (e) {
-      console.error("[Stash Battle] ❌ Background refresh failed:", e);
+      if (e.name === 'AbortError') {
+        console.log(`[Stash Battle] 🛑 Background refresh (Session: ${refreshId}) was aborted.`);
+      } else {
+        console.error("[Stash Battle] ❌ Background refresh failed:", e);
+      }
+    } finally {
+      activeRefreshControllers.delete(controller);
     }
   }
 
@@ -352,9 +382,15 @@
   // Background refresh for filtered scenes
   async function backgroundRefreshFilteredScenes(searchParams, sceneFilter, filterKey) {
     const cacheKey = "filtered-scenes";
+    const refreshId = activeRefreshId;
+    
+    // Create new unique controller for this job
+    const controller = new AbortController();
+    const signal = controller.signal;
+    activeRefreshControllers.add(controller);
     
     try {
-      console.log("[Stash Battle] 🔄 Background refresh started (filtered scenes)...");
+      console.log(`[Stash Battle] 🔄 Background refresh started (filtered scenes, Session: ${refreshId})...`);
       const startTime = Date.now();
       
       const scenesQuery = `
@@ -375,7 +411,13 @@
           direction: "DESC"
         }),
         scene_filter: sceneFilter
-      });
+      }, signal);
+      
+      // Safety check: Don't commit if refresh was aborted or session changed
+      if (signal.aborted || refreshId !== activeRefreshId) {
+        console.log(`[Stash Battle] ⚠️ Session ${refreshId} filtered refresh aborted or superseded, discarding.`);
+        return;
+      }
       
       const scenes = result.findScenes.scenes || [];
       const count = result.findScenes.count || scenes.length;
@@ -399,7 +441,13 @@
         console.log(`[Stash Battle] ⚠️ Filter changed during refresh, discarding results`);
       }
     } catch (e) {
-      console.error("[Stash Battle] ❌ Background refresh (filtered) failed:", e);
+      if (e.name === 'AbortError') {
+        console.log(`[Stash Battle] 🛑 Filtered background refresh (Session: ${refreshId}) was aborted.`);
+      } else {
+        console.error("[Stash Battle] ❌ Background refresh (filtered) failed:", e);
+      }
+    } finally {
+      activeRefreshControllers.delete(controller);
     }
   }
 
@@ -600,13 +648,14 @@
   // GRAPHQL QUERIES
   // ============================================
 
-  async function graphqlQuery(query, variables = {}) {
+  async function graphqlQuery(query, variables = {}, signal = null) {
     const response = await fetch("/graphql", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ query, variables }),
+      signal: signal
     });
     const result = await response.json();
     if (result.errors) {
@@ -804,17 +853,31 @@
       battleBtn.disabled = true;
       loading.style.display = "flex";
       
+      // Kill all active refreshes immediately - we are about to change the world
+      if (activeRefreshControllers.size > 0) {
+        console.log(`[Stash Battle] 🛑 Killing ${activeRefreshControllers.size} active background refresh(es) for swap...`);
+        activeRefreshControllers.forEach(controller => controller.abort());
+        activeRefreshControllers.clear();
+      }
+      
       const res = await runPluginTask(mode);
       const jobId = res.runPluginTask;
       
       console.log(`[Stash Battle] 🚀 Started swap task: ${mode} (Job ID: ${jobId})`);
       await pollJob(jobId);
       
-      console.log("[Stash Battle] ✅ Swap task finished. Resetting state...");
+      console.log("[Stash Battle] ✅ Swap task finished. Resetting state thoroughly...");
       
       // Clear all state
-      await clearSceneCache();
+      await clearSceneCache(); // Also increments activeRefreshId and clears shuffle state
+      
+      // Explicitly reset in-memory variables (handleSwap must be thorough)
+      currentPair = { left: null, right: null };
+      currentRanks = { left: null, right: null };
+      resetGauntletState();
+      
       clearState(); // Clear localStorage
+      saveState();  // Save the fresh empty state
       
       // Refresh mode state
       await startupModeCheck();
@@ -823,10 +886,12 @@
       const comparisonArea = document.getElementById("pwr-comparison-area");
       if (comparisonArea) comparisonArea.innerHTML = '<div class="pwr-loading">Reloading scenes...</div>';
       
-      // If we are now in battle mode, load a new pair
-      if (ratingModeState.mode === 'battle') {
-        loadNewPair();
-      }
+      // Reset actions UI state if needed
+      const actionsEl = document.querySelector(".pwr-actions");
+      if (actionsEl) actionsEl.style.display = "";
+
+      // Load a new pair (always load if we just swapped)
+      await loadNewPair();
       
     } catch (e) {
       console.error("[Stash Battle] Swap failed:", e);
@@ -2716,7 +2781,9 @@
           shuffleFilterKey = null;
           removedSceneIds.clear(); // Reset removed tracking for fresh data
           
-          // Reset gauntlet state since rankings may have changed
+          // Reset current pair and gauntlet state since rankings may have changed
+          currentPair = { left: null, right: null };
+          currentRanks = { left: null, right: null };
           resetGauntletState();
           saveState();
           
