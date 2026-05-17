@@ -68,6 +68,8 @@
   // Track refresh state to prevent race conditions
   let activeRefreshId = 0;
   let activeRefreshControllers = new Set();
+  let refreshAllController = null;
+  let refreshFilteredController = null;
 
   // Open IndexedDB database
   function openCacheDB() {
@@ -175,8 +177,10 @@
     // Kill all active refreshes before clearing
     if (activeRefreshControllers.size > 0) {
       console.log(`[Stash Battle] 🛑 Killing ${activeRefreshControllers.size} active background refresh(es)...`);
-      activeRefreshControllers.forEach(controller => controller.abort());
+      activeRefreshControllers.forEach(controller => controller.abort("manual cache clear"));
       activeRefreshControllers.clear();
+      refreshAllController = null;
+      refreshFilteredController = null;
     }
     activeRefreshId++;
 
@@ -239,8 +243,15 @@
     const cacheKey = "all-scenes";
     const refreshId = activeRefreshId;
     
+    // Abort existing refresh of this type
+    if (refreshAllController) {
+      refreshAllController.abort("superseded by new background all-scenes refresh");
+      activeRefreshControllers.delete(refreshAllController);
+    }
+
     // Create new unique controller for this job
-    const controller = new AbortController();
+    refreshAllController = new AbortController();
+    const controller = refreshAllController;
     const signal = controller.signal;
     activeRefreshControllers.add(controller);
     
@@ -300,6 +311,9 @@
       }
     } finally {
       activeRefreshControllers.delete(controller);
+      if (refreshAllController === controller) {
+        refreshAllController = null;
+      }
     }
   }
 
@@ -345,38 +359,63 @@
     // No cache at all - must fetch from network (blocking)
     console.log("[Stash Battle] 🌐 No cache found, fetching all scenes from network (first load)...");
     const startTime = Date.now();
+    const refreshId = activeRefreshId;
+
+    // Abort existing refresh of this type
+    if (refreshAllController) {
+      refreshAllController.abort("superseded by new blocking all-scenes fetch");
+      activeRefreshControllers.delete(refreshAllController);
+    }
+
+    // Create new unique controller for this job
+    refreshAllController = new AbortController();
+    const controller = refreshAllController;
+    const signal = controller.signal;
+    activeRefreshControllers.add(controller);
     
-    const scenesQuery = `
-      query FindScenesByRating($filter: FindFilterType, $scene_filter: SceneFilterType) {
-        findScenes(filter: $filter, scene_filter: $scene_filter) {
-          count
-          scenes {
-            ${SCENE_FRAGMENT}
+    try {
+      const scenesQuery = `
+        query FindScenesByRating($filter: FindFilterType, $scene_filter: SceneFilterType) {
+          findScenes(filter: $filter, scene_filter: $scene_filter) {
+            count
+            scenes {
+              ${SCENE_FRAGMENT}
+            }
           }
         }
+      `;
+      
+      const result = await graphqlQuery(scenesQuery, {
+        filter: {
+          per_page: -1,
+          sort: "rating",
+          direction: "DESC"
+        },
+        scene_filter: null
+      }, signal);
+      
+      // Safety check: Don't commit if refresh was aborted or session changed
+      if (signal.aborted || refreshId !== activeRefreshId) {
+        throw new Error("Initial fetch aborted or superseded");
       }
-    `;
-    
-    const result = await graphqlQuery(scenesQuery, {
-      filter: {
-        per_page: -1,
-        sort: "rating",
-        direction: "DESC"
-      },
-      scene_filter: null
-    });
-    
-    const scenes = result.findScenes.scenes || [];
-    const count = result.findScenes.count || scenes.length;
-    const fetchTime = Date.now() - startTime;
-    
-    // Store in both caches
-    memoryCache.allScenes = scenes;
-    memoryCache.timestamp = Date.now();
-    await setCachedScenes(cacheKey, scenes, count);
-    
-    console.log(`[Stash Battle] ✅ Fetched and cached ${scenes.length} scenes in ${fetchTime}ms`);
-    return { scenes, count };
+      
+      const scenes = result.findScenes.scenes || [];
+      const count = result.findScenes.count || scenes.length;
+      const fetchTime = Date.now() - startTime;
+      
+      // Store in both caches
+      memoryCache.allScenes = scenes;
+      memoryCache.timestamp = Date.now();
+      await setCachedScenes(cacheKey, scenes, count);
+      
+      console.log(`[Stash Battle] ✅ Fetched and cached ${scenes.length} scenes in ${fetchTime}ms`);
+      return { scenes, count };
+    } finally {
+      activeRefreshControllers.delete(controller);
+      if (refreshAllController === controller) {
+        refreshAllController = null;
+      }
+    }
   }
 
   // Background refresh for filtered scenes
@@ -384,8 +423,15 @@
     const cacheKey = "filtered-scenes";
     const refreshId = activeRefreshId;
     
+    // Abort existing refresh of this type
+    if (refreshFilteredController) {
+      refreshFilteredController.abort("superseded by new background filtered refresh");
+      activeRefreshControllers.delete(refreshFilteredController);
+    }
+
     // Create new unique controller for this job
-    const controller = new AbortController();
+    refreshFilteredController = new AbortController();
+    const controller = refreshFilteredController;
     const signal = controller.signal;
     activeRefreshControllers.add(controller);
     
@@ -448,6 +494,9 @@
       }
     } finally {
       activeRefreshControllers.delete(controller);
+      if (refreshFilteredController === controller) {
+        refreshFilteredController = null;
+      }
     }
   }
 
@@ -511,39 +560,64 @@
     // No matching cache - must fetch from network (blocking)
     console.log("[Stash Battle] 🌐 Fetching filtered scenes from network...");
     const startTime = Date.now();
+    const refreshId = activeRefreshId;
+
+    // Abort existing refresh of this type
+    if (refreshFilteredController) {
+      refreshFilteredController.abort("superseded by new blocking filtered fetch");
+      activeRefreshControllers.delete(refreshFilteredController);
+    }
+
+    // Create new unique controller for this job
+    refreshFilteredController = new AbortController();
+    const controller = refreshFilteredController;
+    const signal = controller.signal;
+    activeRefreshControllers.add(controller);
     
-    const scenesQuery = `
-      query FindScenesByRating($filter: FindFilterType, $scene_filter: SceneFilterType) {
-        findScenes(filter: $filter, scene_filter: $scene_filter) {
-          count
-          scenes {
-            ${SCENE_FRAGMENT}
+    try {
+      const scenesQuery = `
+        query FindScenesByRating($filter: FindFilterType, $scene_filter: SceneFilterType) {
+          findScenes(filter: $filter, scene_filter: $scene_filter) {
+            count
+            scenes {
+              ${SCENE_FRAGMENT}
+            }
           }
         }
+      `;
+      
+      const result = await graphqlQuery(scenesQuery, {
+        filter: getFindFilter(searchParams, {
+          per_page: -1,
+          sort: "rating",
+          direction: "DESC"
+        }),
+        scene_filter: sceneFilter
+      }, signal);
+      
+      // Safety check: Don't commit if refresh was aborted or session changed
+      if (signal.aborted || refreshId !== activeRefreshId) {
+        throw new Error("Filtered fetch aborted or superseded");
       }
-    `;
-    
-    const result = await graphqlQuery(scenesQuery, {
-      filter: getFindFilter(searchParams, {
-        per_page: -1,
-        sort: "rating",
-        direction: "DESC"
-      }),
-      scene_filter: sceneFilter
-    });
-    
-    const scenes = result.findScenes.scenes || [];
-    const count = result.findScenes.count || scenes.length;
-    const fetchTime = Date.now() - startTime;
-    
-    // Store in both caches (include filterKey so we can validate on read)
-    memoryCache.filteredScenes = scenes;
-    memoryCache.filterKey = filterKey;
-    memoryCache.timestamp = Date.now();
-    await setCachedScenesWithFilter(cacheKey, scenes, count, filterKey);
-    
-    console.log(`[Stash Battle] ✅ Fetched and cached ${scenes.length} filtered scenes in ${fetchTime}ms`);
-    return { scenes, count };
+      
+      const scenes = result.findScenes.scenes || [];
+      const count = result.findScenes.count || scenes.length;
+      const fetchTime = Date.now() - startTime;
+      
+      // Store in both caches (include filterKey so we can validate on read)
+      memoryCache.filteredScenes = scenes;
+      memoryCache.filterKey = filterKey;
+      memoryCache.timestamp = Date.now();
+      await setCachedScenesWithFilter(cacheKey, scenes, count, filterKey);
+      
+      console.log(`[Stash Battle] ✅ Fetched and cached ${scenes.length} filtered scenes in ${fetchTime}ms`);
+      return { scenes, count };
+    } finally {
+      activeRefreshControllers.delete(controller);
+      if (refreshFilteredController === controller) {
+        refreshFilteredController = null;
+      }
+    }
   }
 
   // Update a scene's rating and reposition it in the sorted array to keep ranks accurate
@@ -727,6 +801,8 @@
           
           if (!job) {
             if (seenJob) {
+              const progressEl = document.getElementById("pwr-swap-progress");
+              if (progressEl) progressEl.innerText = "Swapping ratings... 100%";
               console.log(`[Stash Battle] 🏁 Job ${jobId} no longer in queue, assuming finished.`);
               clearInterval(interval);
               resolve({ status: "FINISHED" });
@@ -744,9 +820,11 @@
           }
 
           if (job.status === "FINISHED") {
+            if (progressEl) progressEl.innerText = "Swapping ratings... 100%";
             clearInterval(interval);
             resolve(job);
           } else if (job.status === "FAILED") {
+            if (progressEl) progressEl.innerText = "Swap failed!";
             clearInterval(interval);
             reject(new Error("Job failed"));
           }
@@ -801,6 +879,8 @@
     if (comparisonArea) comparisonArea.style.pointerEvents = "auto";
     if (comparisonArea) comparisonArea.style.opacity = "1";
     if (skipBtn) skipBtn.disabled = false;
+    nativeBtn.disabled = false;
+    battleBtn.disabled = false;
 
     switch (ratingModeState.mode) {
       case 'error':
@@ -856,7 +936,7 @@
       // Kill all active refreshes immediately - we are about to change the world
       if (activeRefreshControllers.size > 0) {
         console.log(`[Stash Battle] 🛑 Killing ${activeRefreshControllers.size} active background refresh(es) for swap...`);
-        activeRefreshControllers.forEach(controller => controller.abort());
+        activeRefreshControllers.forEach(controller => controller.abort("rating mode swap"));
         activeRefreshControllers.clear();
       }
       
@@ -890,16 +970,28 @@
       const actionsEl = document.querySelector(".pwr-actions");
       if (actionsEl) actionsEl.style.display = "";
 
+      // Cleanup loading UI before the potentially slow reload
+      loading.style.display = "none";
+      nativeBtn.disabled = false;
+      battleBtn.disabled = false;
+
       // Load a new pair (always load if we just swapped)
       await loadNewPair();
       
     } catch (e) {
+      // Ignore intentional aborts in handleSwap too
+      if (e.name === 'AbortError' || e.message?.includes("aborted") || e.message?.includes("superseded")) {
+        console.log("[Stash Battle] handleSwap aborted or superseded.");
+        return;
+      }
+      
       console.error("[Stash Battle] Swap failed:", e);
       alert("Swap failed! Check server logs for details.");
     } finally {
-      nativeBtn.disabled = false;
-      battleBtn.disabled = false;
-      loading.style.display = "none";
+      // Final safety cleanup
+      if (loading) loading.style.display = "none";
+      if (nativeBtn) nativeBtn.disabled = false;
+      if (battleBtn) battleBtn.disabled = false;
     }
   }
 
@@ -2257,12 +2349,20 @@
       renderPair(scenes, ranks);
       saveState();
     } catch (error) {
+      // Ignore intentional aborts
+      if (error.name === 'AbortError' || error.message?.includes("aborted") || error.message?.includes("superseded")) {
+        console.log("[Stash Battle] loadNewPair aborted or superseded.");
+        return;
+      }
+
       console.error("[Stash Battle] Error loading scenes:", error);
-      const isNoScenes = error.message.includes("No scenes") || error.message.includes("Not enough");
+      const errorMsg = error.message || String(error);
+      const isNoScenes = errorMsg.includes("No scenes") || errorMsg.includes("Not enough");
+      
       comparisonArea.innerHTML = `
         <div class="pwr-error-screen">
           <div class="pwr-error-icon">⚠️</div>
-          <p class="pwr-error-message">${error.message}</p>
+          <p class="pwr-error-message">${errorMsg}</p>
           <button id="pwr-error-retry" class="btn btn-primary">Retry</button>
         </div>
       `;
