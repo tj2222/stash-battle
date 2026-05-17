@@ -887,37 +887,24 @@
     return scene;
   }
 
-  async function fetchSceneCount() {
-    const searchParams = getSearchParams();
-    const sceneFilter = getSceneFilter(searchParams);
-    const { count } = await fetchScenes({ per_page: 0 }, sceneFilter);
-    return count;
-  }
-
-  async function fetchRandomScenes(count = 2) {
-    const totalScenes = await fetchSceneCount();
-    
-    if (totalScenes < 2) {
-      throw new Error("Not enough scenes for comparison. You need at least 2 scenes.");
-    }
- 
+  async function fetchRandomFilteredScenesPair() {
+    const count = 2;
     const searchParams = getSearchParams();
     const sceneFilter = getSceneFilter(searchParams);
  
-    const { scenes: allScenes } = await fetchScenes(
+    const { scenes } = await fetchScenes(
       getFindFilter(searchParams, {
-        per_page: Math.min(100, totalScenes),
+        per_page: count,
         sort: "random"
       }),
       sceneFilter
     );
  
-    if (allScenes.length < 2) {
-      throw new Error("Not enough scenes returned from query.");
+    if (scenes.length < count) {
+      throw new Error(`Not enough filtered scenes for comparison. You need at least ${count} scenes but only found ${scenes.length}.`);
     }
  
-    const shuffled = allScenes.sort(() => Math.random() - 0.5);
-    return shuffled.slice(0, 2);
+    return scenes;
   }
 
   // Swiss mode: fetch two scenes with similar ratings
@@ -1097,7 +1084,7 @@
     totalScenesCount = opponentPool.length;
 
     if (allScenes.length < 2) {
-      return { scenes: await fetchRandomScenes(2), ranks: [null, null], isVictory: false, isFalling: false };
+      return { scenes: await fetchRandomFilteredScenesPair(), ranks: [null, null], isVictory: false, isFalling: false };
     }
 
     // Handle falling mode - find next opponent BELOW to test against (from full collection)
@@ -1247,7 +1234,7 @@
     totalScenesCount = opponentPool.length;
     
     if (allScenes.length < 2) {
-      return { scenes: await fetchRandomScenes(2), ranks: [null, null], isVictory: false };
+      return { scenes: await fetchRandomFilteredScenesPair(), ranks: [null, null], isVictory: false };
     }
 
     // If no champion yet, pick from filtered pool to start
