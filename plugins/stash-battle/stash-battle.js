@@ -215,28 +215,7 @@
       console.log("[Stash Battle] 🔄 Background refresh started (all scenes)...");
       const startTime = Date.now();
       
-      const scenesQuery = `
-        query FindScenesByRating($filter: FindFilterType, $scene_filter: SceneFilterType) {
-          findScenes(filter: $filter, scene_filter: $scene_filter) {
-            count
-            scenes {
-              ${SCENE_FRAGMENT}
-            }
-          }
-        }
-      `;
-      
-      const result = await graphqlQuery(scenesQuery, {
-        filter: {
-          per_page: -1,
-          sort: "rating",
-          direction: "DESC"
-        },
-        scene_filter: null
-      });
-      
-      const scenes = result.findScenes.scenes || [];
-      const count = result.findScenes.count || scenes.length;
+      const { scenes, count } = await fetchScenes(RATING_SORT_FILTER);
       const fetchTime = Date.now() - startTime;
       
       // Check if count changed (new scenes added/removed)
@@ -301,28 +280,7 @@
     console.log("[Stash Battle] 🌐 No cache found, fetching all scenes from network (first load)...");
     const startTime = Date.now();
     
-    const scenesQuery = `
-      query FindScenesByRating($filter: FindFilterType, $scene_filter: SceneFilterType) {
-        findScenes(filter: $filter, scene_filter: $scene_filter) {
-          count
-          scenes {
-            ${SCENE_FRAGMENT}
-          }
-        }
-      }
-    `;
-    
-    const result = await graphqlQuery(scenesQuery, {
-      filter: {
-        per_page: -1,
-        sort: "rating",
-        direction: "DESC"
-      },
-      scene_filter: null
-    });
-    
-    const scenes = result.findScenes.scenes || [];
-    const count = result.findScenes.count || scenes.length;
+    const { scenes, count } = await fetchScenes(RATING_SORT_FILTER);
     const fetchTime = Date.now() - startTime;
     
     // Store in both caches
@@ -342,28 +300,10 @@
       console.log("[Stash Battle] 🔄 Background refresh started (filtered scenes)...");
       const startTime = Date.now();
       
-      const scenesQuery = `
-        query FindScenesByRating($filter: FindFilterType, $scene_filter: SceneFilterType) {
-          findScenes(filter: $filter, scene_filter: $scene_filter) {
-            count
-            scenes {
-              ${SCENE_FRAGMENT}
-            }
-          }
-        }
-      `;
-      
-      const result = await graphqlQuery(scenesQuery, {
-        filter: getFindFilter(searchParams, {
-          per_page: -1,
-          sort: "rating",
-          direction: "DESC"
-        }),
-        scene_filter: sceneFilter
-      });
-      
-      const scenes = result.findScenes.scenes || [];
-      const count = result.findScenes.count || scenes.length;
+      const { scenes, count } = await fetchScenes(
+        getFindFilter(searchParams, RATING_SORT_FILTER),
+        sceneFilter
+      );
       const fetchTime = Date.now() - startTime;
       
       // Only update if still on same filter
@@ -449,28 +389,10 @@
     console.log("[Stash Battle] 🌐 Fetching filtered scenes from network...");
     const startTime = Date.now();
     
-    const scenesQuery = `
-      query FindScenesByRating($filter: FindFilterType, $scene_filter: SceneFilterType) {
-        findScenes(filter: $filter, scene_filter: $scene_filter) {
-          count
-          scenes {
-            ${SCENE_FRAGMENT}
-          }
-        }
-      }
-    `;
-    
-    const result = await graphqlQuery(scenesQuery, {
-      filter: getFindFilter(searchParams, {
-        per_page: -1,
-        sort: "rating",
-        direction: "DESC"
-      }),
-      scene_filter: sceneFilter
-    });
-    
-    const scenes = result.findScenes.scenes || [];
-    const count = result.findScenes.count || scenes.length;
+    const { scenes, count } = await fetchScenes(
+      getFindFilter(searchParams, RATING_SORT_FILTER),
+      sceneFilter
+    );
     const fetchTime = Date.now() - startTime;
     
     // Store in both caches (include filterKey so we can validate on read)
@@ -625,6 +547,34 @@
       name
     }
   `;
+
+  const RATING_SORT_FILTER = {
+    per_page: -1,
+    sort: "rating",
+    direction: "DESC"
+  };
+
+  const FIND_SCENES_QUERY = `
+    query FindScenes($filter: FindFilterType, $scene_filter: SceneFilterType) {
+      findScenes(filter: $filter, scene_filter: $scene_filter) {
+        count
+        scenes {
+          ${SCENE_FRAGMENT}
+        }
+      }
+    }
+  `;
+
+  async function fetchScenes(filter, sceneFilter = null) {
+    const data = await graphqlQuery(FIND_SCENES_QUERY, {
+      filter,
+      scene_filter: sceneFilter
+    });
+    return {
+      scenes: data.findScenes.scenes || [],
+      count: data.findScenes.count || 0
+    };
+  }
 
   // ============================================
   // NAVIGATION
@@ -940,16 +890,8 @@
   async function fetchSceneCount() {
     const searchParams = getSearchParams();
     const sceneFilter = getSceneFilter(searchParams);
-    
-    const countQuery = `
-      query FindScenesCount($scene_filter: SceneFilterType) {
-        findScenes(filter: { per_page: 0 }, scene_filter: $scene_filter) {
-          count
-        }
-      }
-    `;
-    const countResult = await graphqlQuery(countQuery, { scene_filter: sceneFilter });
-    return countResult.findScenes.count;
+    const { count } = await fetchScenes({ per_page: 0 }, sceneFilter);
+    return count;
   }
 
   async function fetchRandomScenes(count = 2) {
@@ -958,34 +900,22 @@
     if (totalScenes < 2) {
       throw new Error("Not enough scenes for comparison. You need at least 2 scenes.");
     }
-
+ 
     const searchParams = getSearchParams();
     const sceneFilter = getSceneFilter(searchParams);
-
-    const scenesQuery = `
-      query FindRandomScenes($filter: FindFilterType, $scene_filter: SceneFilterType) {
-        findScenes(filter: $filter, scene_filter: $scene_filter) {
-          scenes {
-            ${SCENE_FRAGMENT}
-          }
-        }
-      }
-    `;
-
-    const result = await graphqlQuery(scenesQuery, {
-      filter: getFindFilter(searchParams, {
+ 
+    const { scenes: allScenes } = await fetchScenes(
+      getFindFilter(searchParams, {
         per_page: Math.min(100, totalScenes),
         sort: "random"
       }),
-      scene_filter: sceneFilter
-    });
-
-    const allScenes = result.findScenes.scenes || [];
-    
+      sceneFilter
+    );
+ 
     if (allScenes.length < 2) {
       throw new Error("Not enough scenes returned from query.");
     }
-
+ 
     const shuffled = allScenes.sort(() => Math.random() - 0.5);
     return shuffled.slice(0, 2);
   }
