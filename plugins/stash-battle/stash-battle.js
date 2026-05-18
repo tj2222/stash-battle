@@ -792,10 +792,10 @@
           variables[`input_${index}`] = {
             id: scene.id,
             custom_fields: {
-              partial: {
-                [RATING_CUSTOM_FIELD_KEY]: null,
-                [BATTLE_COUNT_CUSTOM_FIELD_KEY]: null
-              }
+              remove: [
+                RATING_CUSTOM_FIELD_KEY,
+                BATTLE_COUNT_CUSTOM_FIELD_KEY
+              ]
             }
           };
         });
