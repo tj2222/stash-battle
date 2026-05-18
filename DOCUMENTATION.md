@@ -126,6 +126,25 @@ When a battle completes and ELO rating is updated, `updateSceneInCache()` modifi
 
 ---
 
+## Configuration & Rating Reset Panel
+
+The plugin includes a dedicated configuration screen that allows users to manage preferences and metadata state directly from the Stash UI.
+
+### 1. UI Transition Model
+- **⚙️ Config Button**: Injected into the modal's action footer to the right of the "Refresh Cache" button.
+- **Stateless DOM Swap**: Clicking "Config" hides the standard action buttons (`.pwr-actions`) and game status headers, rendering the config panel inside `#pwr-comparison-area`.
+- **"Back to Battle"**: Renders a back button that restores actions and calls `loadNewPair()` to dynamically rebuild and hydrate the current comparison matchup card layout.
+
+### 2. High-Performance Bulk Rating Destruction
+Resetting ratings requires clearing custom field values (`battle-rating` and `battle-count`) in Stash's database for all scenes that have them. To achieve maximum performance and reliability:
+- **GraphQL Aliased Batching**: Instead of executing sequential HTTP requests, Stash Battle constructs bulk GraphQL mutation strings by combining **50 aliased operations into a single HTTP request** (e.g. `update_0: sceneUpdate(...) { id } update_1: sceneUpdate(...) { id }`).
+- **Network Load Reduction**: By batching mutations 50 at a time, network roundtrip and transaction overhead are reduced by exactly 98%.
+- **Safety Safeguard**: When clicking "Reset All Ratings", a premium glassmorphic overlay dialog interrupts the user: `"Are you sure you want to DESTROY the ratings of all $n rated scenes?"` with "Cancel" and "Destroy" options.
+- **Progress Tracking**: During execution, the Config Panel shows a real-time progress bar (e.g. `"Destroying ratings: 50 / 320 (16%)"`), preventing any background clicks.
+- **Synchronous Cache Invalidation**: Once execution finishes, all in-memory caches, details caches, IndexedDB, and game states are synchronous-cleared, automatically re-fetching fresh data from Stash.
+
+---
+
 ## Filtered Pool Management
 
 ### Shuffled Traversal

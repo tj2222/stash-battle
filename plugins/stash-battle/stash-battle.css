@@ -803,3 +803,221 @@
   100% { transform: translateX(100%); }
 }
 
+/* Config Panel Styles */
+.pwr-config-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  padding: 24px;
+  background: rgba(20, 20, 20, 0.85);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(10px);
+  box-sizing: border-box;
+  color: #e0e0e0;
+}
+
+.pwr-config-header {
+  margin-bottom: 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 16px;
+}
+
+.pwr-config-title {
+  font-size: 1.8rem;
+  font-weight: 700;
+  margin: 0 0 8px 0;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pwr-config-subtitle {
+  font-size: 0.95rem;
+  color: #888;
+  margin: 0;
+}
+
+.pwr-config-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  overflow-y: auto;
+}
+
+.pwr-config-card {
+  background: rgba(30, 30, 30, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 20px;
+  transition: transform 0.2s, border-color 0.2s;
+}
+
+.pwr-config-card:hover {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.pwr-card-title {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin: 0 0 8px 0;
+  color: #fff;
+}
+
+.pwr-card-desc {
+  font-size: 0.9rem;
+  color: #aaa;
+  margin: 0 0 16px 0;
+  line-height: 1.4;
+}
+
+/* Danger buttons and confirmation custom overlays */
+.pwr-btn-danger {
+  background: linear-gradient(135deg, #d32f2f, #b71c1c);
+  color: #fff;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: background 0.3s, transform 0.1s, box-shadow 0.2s;
+  box-shadow: 0 4px 12px rgba(211, 47, 47, 0.2);
+}
+
+.pwr-btn-danger:hover {
+  background: linear-gradient(135deg, #e53935, #c62828);
+  box-shadow: 0 6px 16px rgba(211, 47, 47, 0.35);
+  transform: translateY(-1px);
+}
+
+.pwr-btn-danger:active {
+  transform: translateY(1px);
+}
+
+.pwr-btn-danger:disabled {
+  background: #4a1d1d;
+  color: #777;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+/* Confirmation Overlay */
+.pwr-confirm-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(10, 10, 10, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  border-radius: 12px;
+  backdrop-filter: blur(4px);
+  animation: pwr-fade-in 0.25s ease-out;
+}
+
+.pwr-confirm-dialog {
+  background: #1e1e1e;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 24px;
+  width: 90%;
+  max-width: 440px;
+  text-align: center;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  animation: pwr-scale-in 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.pwr-confirm-icon {
+  font-size: 3rem;
+  margin-bottom: 16px;
+  animation: pwr-pulse-glow 1.5s infinite;
+}
+
+.pwr-confirm-title {
+  font-size: 1.3rem;
+  font-weight: 700;
+  margin: 0 0 12px 0;
+  color: #fff;
+}
+
+.pwr-confirm-message {
+  font-size: 0.95rem;
+  color: #ccc;
+  margin: 0 0 24px 0;
+  line-height: 1.5;
+}
+
+.pwr-confirm-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+
+/* Progress Tracking UI */
+.pwr-progress-wrapper {
+  margin-top: 12px;
+  width: 100%;
+}
+
+.pwr-progress-status-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+}
+
+.pwr-progress-status {
+  color: #388e3c;
+  font-weight: 600;
+}
+
+.pwr-progress-count {
+  color: #aaa;
+}
+
+.pwr-progress-track {
+  width: 100%;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.pwr-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #4caf50, #81c784);
+  border-radius: 4px;
+  transition: width 0.1s ease-out;
+  box-shadow: 0 0 8px rgba(76, 175, 80, 0.4);
+}
+
+/* Modal Animations */
+@keyframes pwr-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pwr-scale-in {
+  from { transform: scale(0.9); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+@keyframes pwr-pulse-glow {
+  0% { transform: scale(1); opacity: 0.8; }
+  50% { transform: scale(1.08); opacity: 1; filter: drop-shadow(0 0 8px rgba(211, 47, 47, 0.6)); }
+  100% { transform: scale(1); opacity: 0.8; }
+}
+
+

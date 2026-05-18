@@ -653,6 +653,214 @@
     }
   }
 
+  function renderConfigPanel() {
+    const comparisonArea = document.getElementById("pwr-comparison-area");
+    if (!comparisonArea) return;
+    
+    // Hide standard action buttons and keyboard hint
+    const actionsEl = document.querySelector(".pwr-actions");
+    if (actionsEl) {
+      actionsEl.style.display = "none";
+    }
+
+    // Hide any other banners
+    const statusEl = document.getElementById("pwr-gauntlet-status");
+    if (statusEl) {
+      statusEl.style.display = "none";
+    }
+
+    // Count rated scenes
+    const allScenes = memoryCache.allScenes || [];
+    const ratedCount = allScenes.filter(s => getSceneRating(s) !== null).length;
+
+    comparisonArea.innerHTML = `
+      <div class="pwr-config-panel" style="position: relative;">
+        <div class="pwr-config-header">
+          <h2 class="pwr-config-title">⚙️ Stash Battle Configurations</h2>
+          <p class="pwr-config-subtitle">Manage your ELO head-to-head matching preferences and data.</p>
+        </div>
+        <div class="pwr-config-content">
+          <div class="pwr-config-card">
+            <h3 class="pwr-card-title">Reset All Ratings</h3>
+            <p class="pwr-card-desc">
+              Completely erase all custom ELO ratings and battle counts across your entire library. 
+              This will restore all scenes to the default starting baseline (1500, unrated). 
+              <strong>Warning: This action is permanent and cannot be undone.</strong>
+            </p>
+            <button id="pwr-reset-ratings-btn" class="pwr-btn-danger" ${ratedCount === 0 ? "disabled" : ""}>
+              💥 Reset All Ratings (${ratedCount} rated)
+            </button>
+            <div id="pwr-reset-progress-area"></div>
+          </div>
+        </div>
+        <div class="pwr-confirm-actions" style="margin-top:20px; justify-content: flex-end;">
+          <button id="pwr-config-back-btn" class="btn btn-secondary">Back to Battle</button>
+        </div>
+      </div>
+    `;
+
+    // Attach button listeners
+    const backBtn = comparisonArea.querySelector("#pwr-config-back-btn");
+    if (backBtn) {
+      backBtn.addEventListener("click", () => {
+        if (actionsEl) actionsEl.style.display = "";
+        loadNewPair();
+      });
+    }
+
+    const resetBtn = comparisonArea.querySelector("#pwr-reset-ratings-btn");
+    if (resetBtn && ratedCount > 0) {
+      resetBtn.addEventListener("click", () => {
+        showResetConfirmationModal(ratedCount);
+      });
+    }
+  }
+
+  function showResetConfirmationModal(n) {
+    const configPanel = document.querySelector(".pwr-config-panel");
+    if (!configPanel) return;
+
+    const overlay = document.createElement("div");
+    overlay.className = "pwr-confirm-overlay";
+    overlay.innerHTML = `
+      <div class="pwr-confirm-dialog">
+        <div class="pwr-confirm-icon">⚠️</div>
+        <h3 class="pwr-confirm-title">Are you sure?</h3>
+        <p class="pwr-confirm-message">
+          Are you sure you want to <strong>DESTROY</strong> the ratings of all <strong>${n}</strong> rated scenes?
+          This will permanently erase all matchmaking history and ELO scores.
+        </p>
+        <div class="pwr-confirm-actions">
+          <button id="pwr-confirm-cancel-btn" class="btn btn-secondary">Cancel</button>
+          <button id="pwr-confirm-destroy-btn" class="pwr-btn-danger">Destroy</button>
+        </div>
+      </div>
+    `;
+
+    configPanel.appendChild(overlay);
+
+    overlay.querySelector("#pwr-confirm-cancel-btn").addEventListener("click", () => {
+      overlay.remove();
+    });
+
+    overlay.querySelector("#pwr-confirm-destroy-btn").addEventListener("click", async () => {
+      overlay.remove(); // Remove confirmation modal
+      await executeRatingsDestroy(n);
+    });
+  }
+
+  async function executeRatingsDestroy(totalCount) {
+    const resetBtn = document.getElementById("pwr-reset-ratings-btn");
+    const backBtn = document.getElementById("pwr-config-back-btn");
+    const progressArea = document.getElementById("pwr-reset-progress-area");
+
+    if (resetBtn) resetBtn.disabled = true;
+    if (backBtn) backBtn.disabled = true;
+
+    if (progressArea) {
+      progressArea.innerHTML = `
+        <div class="pwr-progress-wrapper">
+          <div class="pwr-progress-status-container">
+            <span class="pwr-progress-status">Destroying ratings...</span>
+            <span id="pwr-progress-percent" class="pwr-progress-count">0 / ${totalCount} (0%)</span>
+          </div>
+          <div class="pwr-progress-track">
+            <div id="pwr-progress-bar-fill" class="pwr-progress-bar"></div>
+          </div>
+        </div>
+      `;
+    }
+
+    const allScenes = memoryCache.allScenes || [];
+    const ratedScenes = allScenes.filter(s => getSceneRating(s) !== null);
+    const total = ratedScenes.length;
+
+    const chunkSize = 50;
+    let completedCount = 0;
+
+    try {
+      for (let i = 0; i < total; i += chunkSize) {
+        const chunk = ratedScenes.slice(i, i + chunkSize);
+        
+        // Dynamically build bulk aliased mutations with variables definitions
+        let mutationParts = [];
+        let varDefs = [];
+        let variables = {};
+        chunk.forEach((scene, index) => {
+          varDefs.push(`$input_${index}: SceneUpdateInput!`);
+          mutationParts.push(`update_${index}: sceneUpdate(input: $input_${index}) { id }`);
+          variables[`input_${index}`] = {
+            id: scene.id,
+            custom_fields: {
+              partial: {
+                [RATING_CUSTOM_FIELD_KEY]: null,
+                [BATTLE_COUNT_CUSTOM_FIELD_KEY]: null
+              }
+            }
+          };
+        });
+        
+        const bulkMutation = `
+          mutation ResetRatingsBulk(${varDefs.join(', ')}) {
+            ${mutationParts.join('\n            ')}
+          }
+        `;
+
+        // Send the bulk mutation with variables
+        await graphqlQuery(bulkMutation, variables);
+
+        completedCount += chunk.length;
+        const percent = Math.round((completedCount / total) * 100);
+
+        // Update progress bar
+        const barFill = document.getElementById("pwr-progress-bar-fill");
+        const progressPercentText = document.getElementById("pwr-progress-percent");
+        if (barFill) barFill.style.width = `${percent}%`;
+        if (progressPercentText) {
+          progressPercentText.textContent = `${completedCount} / ${total} (${percent}%)`;
+        }
+      }
+
+      // Success screen/feedback
+      if (progressArea) {
+        progressArea.innerHTML = `
+          <div class="pwr-progress-status-container" style="margin-top: 15px;">
+            <span class="pwr-progress-status" style="color: #4caf50; font-weight: 600;">✅ Ratings successfully destroyed!</span>
+          </div>
+        `;
+      }
+
+      // Clear all caches synchronously to reflect the resets
+      await clearSceneCache();
+      
+      // Reset shuffle and session states
+      shuffledFilteredScenes = [];
+      shuffleIndex = 0;
+      shuffleFilterKey = null;
+      removedSceneIds.clear();
+      resetGauntletState();
+      saveState();
+
+      // Show actions button container again
+      const actionsEl = document.querySelector(".pwr-actions");
+      if (actionsEl) {
+        actionsEl.style.display = "";
+      }
+
+    } catch (e) {
+      console.error("[Stash Battle] ❌ Rating reset failed:", e);
+      if (progressArea) {
+        progressArea.innerHTML = `
+          <div class="pwr-progress-status-container" style="margin-top: 15px;">
+            <span class="pwr-progress-status" style="color: #f44336; font-weight: 600;">❌ Reset failed: ${e.message}</span>
+          </div>
+        `;
+      }
+      if (resetBtn) resetBtn.disabled = false;
+      if (backBtn) backBtn.disabled = false;
+    }
+  }
+
   async function fetchScenes(filter, sceneFilter = null) {
     const data = await graphqlQuery(FIND_SCENES_QUERY, {
       filter,
@@ -1844,6 +2052,7 @@
             <div class="pwr-action-buttons">
               <button id="pwr-skip-btn" class="btn btn-secondary">Skip (Get New Pair)</button>
               <button id="pwr-refresh-cache-btn" class="btn btn-secondary" title="Refresh scene list from server (use if you've added new scenes)">🔄 Refresh Cache</button>
+              <button id="pwr-config-btn" class="btn btn-secondary" title="Stash Battle Configurations">⚙️ Config</button>
             </div>
             <div class="pwr-keyboard-hint">
               <span>← Left Arrow</span> to choose left · 
@@ -2664,6 +2873,15 @@
           refreshCacheBtn.disabled = false;
           refreshCacheBtn.textContent = "🔄 Refresh Cache";
         }
+      });
+    }
+
+    // Config button
+    const configBtn = modal.querySelector("#pwr-config-btn");
+    if (configBtn) {
+      configBtn.addEventListener("click", () => {
+        if (disableChoice) return;
+        renderConfigPanel();
       });
     }
 
