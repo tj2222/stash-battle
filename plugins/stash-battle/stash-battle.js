@@ -7,6 +7,24 @@
   const CACHE_STORE_NAME = "scenes";
   const CACHE_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes cache expiry
 
+  const RATING_CUSTOM_FIELD_KEY = "battle-rating";
+  // const PLAY_COUNT_CUSTOM_FIELD_KEY = "battle-play-count"; // TODO later
+
+  function getSceneRating(scene) {
+    if (!scene) return null;
+    const rating = scene.custom_fields?.[RATING_CUSTOM_FIELD_KEY];
+    if (rating === undefined || rating === null) return null;
+    return Number(rating);
+  }
+
+  function setSceneRating(scene, rating) {
+    if (!scene) return;
+    if (!scene.custom_fields) {
+      scene.custom_fields = {};
+    }
+    scene.custom_fields[RATING_CUSTOM_FIELD_KEY] = rating;
+  }
+
   // Current comparison pair and mode
   let currentPair = { left: null, right: null };
   let currentRanks = { left: null, right: null };
@@ -411,13 +429,13 @@
     if (idx === -1) return false;
     
     const scene = arr[idx];
-    scene.rating100 = newRating;
+    setSceneRating(scene, newRating);
     
     // Remove from current position
     arr.splice(idx, 1);
     
     // Find correct position (array is sorted by rating DESC)
-    const newIdx = arr.findIndex(s => (s.rating100 || 0) < newRating);
+    const newIdx = arr.findIndex(s => (getSceneRating(s) || 0) < newRating);
     
     // Insert at correct position
     if (newIdx === -1) {
@@ -441,7 +459,7 @@
     if (memoryCache.filteredScenes) {
       const scene = memoryCache.filteredScenes.find(s => s.id === sceneId);
       if (scene) {
-        scene.rating100 = newRating;
+        setSceneRating(scene, newRating);
       }
     }
   }
@@ -527,7 +545,7 @@
     id
     title
     date
-    rating100
+    custom_fields
     play_count
     paths {
       screenshot
@@ -570,8 +588,17 @@
       filter,
       scene_filter: sceneFilter
     });
+    const scenes = data.findScenes.scenes || [];
+    scenes.sort((a, b) => {
+      const rA = getSceneRating(a);
+      const rB = getSceneRating(b);
+      if (rA === null && rB === null) return 0;
+      if (rA === null) return 1;
+      if (rB === null) return -1;
+      return rB - rA;
+    });
     return {
-      scenes: data.findScenes.scenes || [],
+      scenes,
       count: data.findScenes.count || 0
     };
   }
@@ -981,7 +1008,7 @@
     if (filterOpponents && hasFilter) {
       opponentPool = filteredScenes;
     } else {
-      const ratedOnly = allScenes.filter(s => s.rating100 != null);
+      const ratedOnly = allScenes.filter(s => getSceneRating(s) != null);
       opponentPool = ratedOnly.length >= 1 ? ratedOnly : allScenes;
     }
 
@@ -1046,7 +1073,7 @@
   function findLowestRated(scenes, excludeId) {
     for (let i = scenes.length - 1; i >= 0; i--) {
       const s = scenes[i];
-      if (s.id !== excludeId && s.rating100 != null) {
+      if (s.id !== excludeId && getSceneRating(s) != null) {
         return { scene: s, index: i };
       }
     }
@@ -1078,7 +1105,7 @@
     if (filterOpponents && hasFilter) {
       opponentPool = filteredScenes;
     } else {
-      const ratedOnly = allScenes.filter(s => s.rating100 != null);
+      const ratedOnly = allScenes.filter(s => getSceneRating(s) != null);
       opponentPool = ratedOnly.length >= 1 ? ratedOnly : allScenes;
     }
     totalScenesCount = opponentPool.length;
@@ -1103,7 +1130,7 @@
         const finalRank = opponentPool.length;
         const lastDefeatedById = gauntletDefeated[gauntletDefeated.length - 1];
         const lastOpponent = opponentPool.find(s => s.id === lastDefeatedById);
-        const finalRating = Math.max(1, (lastOpponent?.rating100 || 2) - 1);
+        const finalRating = Math.max(1, (getSceneRating(lastOpponent) || 2) - 1);
         updateSceneRating(gauntletFallingScene.id, finalRating);
         
         return {
@@ -1179,7 +1206,7 @@
       if (s.id === gauntletChampion.id) return false;
       if (gauntletDefeated.includes(s.id)) return false;
       // Only scenes ranked higher (lower index) or same rating
-      return idx < championIndex || (s.rating100 || 0) >= (gauntletChampion.rating100 || 0);
+      return idx < championIndex || (getSceneRating(s) || 0) >= (getSceneRating(gauntletChampion) || 0);
     });
     
     // If no opponents left, champion has truly won
@@ -1228,7 +1255,7 @@
     if (filterOpponents && hasFilter) {
       opponentPool = filteredScenes;
     } else {
-      const ratedOnly = allScenes.filter(s => s.rating100 != null);
+      const ratedOnly = allScenes.filter(s => getSceneRating(s) != null);
       opponentPool = ratedOnly.length >= 1 ? ratedOnly : allScenes;
     }
     totalScenesCount = opponentPool.length;
@@ -1276,7 +1303,7 @@
     const remainingOpponents = opponentPool.filter((s, idx) => {
       if (s.id === gauntletChampion.id) return false;
       if (gauntletDefeated.includes(s.id)) return false;
-      return idx < championIndex || (s.rating100 || 0) >= (gauntletChampion.rating100 || 0);
+      return idx < championIndex || (getSceneRating(s) || 0) >= (getSceneRating(gauntletChampion) || 0);
     });
     
     // If no opponents left, champion has won!
@@ -1387,26 +1414,30 @@
   }
   
   // Update scene rating in Stash database
-  async function updateSceneRating(sceneId, rating100) {
+  async function updateSceneRating(sceneId, rating) {
     const mutation = `
       mutation SceneUpdate($input: SceneUpdateInput!) {
         sceneUpdate(input: $input) {
           id
-          rating100
+          custom_fields
         }
       }
     `;
     
-    const finalRating = Math.max(1, Math.min(100, rating100));
+    const finalRating = Math.max(1, Math.min(100, rating));
     
     try {
       await graphqlQuery(mutation, {
         input: {
           id: sceneId,
-          rating100: finalRating
+          custom_fields: {
+            partial: {
+              [RATING_CUSTOM_FIELD_KEY]: finalRating
+            }
+          }
         }
       });
-      console.log(`[Stash Battle] 📝 Updated scene ${sceneId} rating to ${finalRating} in Stash`);
+      console.log(`[Stash Battle] 📝 Updated scene ${sceneId} custom field rating to ${finalRating} in Stash`);
 
       
       // Update the in-memory cache to keep it in sync
@@ -1557,7 +1588,8 @@
     
     const screenshotPath = scene.paths ? scene.paths.screenshot : null;
     const previewPath = scene.paths ? scene.paths.preview : null;
-    const stashRating = scene.rating100 ? `${scene.rating100}/100` : "Unrated";
+    const rating = getSceneRating(scene);
+    const stashRating = rating ? `${rating}/100` : "Unrated";
     
     // Handle numeric ranks and string ranks
     let rankDisplay = '';
@@ -1916,9 +1948,9 @@
     
     const winnerScene = winnerId === currentPair.left.id ? currentPair.left : currentPair.right;
     const loserScene = loserId === currentPair.left.id ? currentPair.left : currentPair.right;
-    const winnerRating = winnerScene.rating100 || 1;
-    const loserRating = loserScene.rating100 || 1;
-    const loserDisplayRating = loserScene.rating100 || 0;
+    const winnerRating = getSceneRating(winnerScene) || 1;
+    const loserRating = getSceneRating(loserScene) || 1;
+    const loserDisplayRating = getSceneRating(loserScene) || 0;
     const loserSide = winnerId === currentPair.left.id ? "right" : "left";
     const loserCard = document.querySelector(`.pwr-scene-card[data-side="${loserSide}"]`);
     
@@ -1983,22 +2015,22 @@
       if (winnerId === gauntletChampion.id) {
         gauntletDefeated.push(loserId);
         gauntletWins++;
-        gauntletChampion.rating100 = newWinnerRating;
+        setSceneRating(gauntletChampion, newWinnerRating);
         console.log(`[Stash Battle] 📊 Gauntlet: champion ${winnerId} won (streak=${gauntletWins}), rating → ${newWinnerRating}`);
       } else if (isFirstBattle) {
         gauntletChampion = winnerScene;
-        gauntletChampion.rating100 = newWinnerRating;
+        setSceneRating(gauntletChampion, newWinnerRating);
         gauntletDefeated = [loserId];
         gauntletWins = 1;
         console.log(`[Stash Battle] 📊 Gauntlet: first battle, ${winnerId} becomes champion with rating ${newWinnerRating}`);
       } else {
-        console.log(`[Stash Battle] 📊 Gauntlet: champion ${gauntletChampion.id}(rating=${gauntletChampion.rating100}) LOST to ${winnerId}(rating=${newWinnerRating}), entering falling mode`);
+        console.log(`[Stash Battle] 📊 Gauntlet: champion ${gauntletChampion.id}(rating=${getSceneRating(gauntletChampion)}) LOST to ${winnerId}(rating=${newWinnerRating}), entering falling mode`);
         gauntletFalling = true;
         gauntletFallingScene = loserScene;
         gauntletDefeated = [winnerId];
         
         gauntletChampion = winnerScene;
-        gauntletChampion.rating100 = newWinnerRating;
+        setSceneRating(gauntletChampion, newWinnerRating);
         gauntletWins = 1;
       }
       
@@ -2040,11 +2072,11 @@
         // Champion won - continue climbing
         gauntletDefeated.push(loserId);
         gauntletWins++;
-        gauntletChampion.rating100 = newWinnerRating;
+        setSceneRating(gauntletChampion, newWinnerRating);
       } else {
         // Champion lost or first pick - winner becomes new champion
         gauntletChampion = winnerScene;
-        gauntletChampion.rating100 = newWinnerRating;
+        setSceneRating(gauntletChampion, newWinnerRating);
         gauntletDefeated = [loserId];
         gauntletWins = 1;
       }
