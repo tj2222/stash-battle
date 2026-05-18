@@ -9,7 +9,8 @@
 
   const RATING_CUSTOM_FIELD_KEY = "battle-rating";
   const BATTLE_COUNT_CUSTOM_FIELD_KEY = "battle-count";
-  const DEFAULT_RATING = 50;
+  const DEFAULT_RATING = 1500;
+  const RATING_FLOOR = 100;
 
   function getSceneRating(scene) {
     if (!scene) return null;
@@ -1075,8 +1076,14 @@
 
     // index of scene1 within the chosen pool
     const scene1IdxInPool = opponentPool.findIndex(s => s.id === scene1.id);
-    // If scene1 not in opponent pool (unrated), position at end to match against lowest-rated
-    const effectiveScene1Idx = scene1IdxInPool >= 0 ? scene1IdxInPool : opponentPool.length;
+    // If scene1 not in opponent pool (unrated), position where DEFAULT_RATING (1200) would sit
+    let effectiveScene1Idx = scene1IdxInPool;
+    if (effectiveScene1Idx === -1) {
+      effectiveScene1Idx = opponentPool.findIndex(s => (getSceneRating(s) || DEFAULT_RATING) < DEFAULT_RATING);
+      if (effectiveScene1Idx === -1) {
+        effectiveScene1Idx = opponentPool.length;
+      }
+    }
     const scene1RankInPool = scene1IdxInPool >= 0 ? scene1IdxInPool + 1 : null;
 
     // Collect candidates near scene1 in opponentPool, expanding reach if needed
@@ -1180,7 +1187,7 @@
         const finalRank = opponentPool.length;
         const lastDefeatedById = gauntletDefeated[gauntletDefeated.length - 1];
         const lastOpponent = opponentPool.find(s => s.id === lastDefeatedById);
-        const finalRating = Math.max(1, (getSceneRating(lastOpponent) || DEFAULT_RATING) - 1);
+        const finalRating = Math.max(RATING_FLOOR, (getSceneRating(lastOpponent) || DEFAULT_RATING) - 1);
         const newCount = getSceneBattleCount(gauntletFallingScene) + 1;
         updateSceneRatingAndCount(gauntletFallingScene.id, finalRating, newCount);
         
@@ -1469,7 +1476,7 @@
         <h3 class="pwr-victory-name">${title}</h3>
         <p class="pwr-victory-stats">
           Rank <strong>#${rank}</strong> of ${totalScenesCount}<br>
-          Rating: <strong>${finalRating}/100</strong>
+          Rating: <strong>${finalRating}</strong>
         </p>
         <button id="pwr-new-gauntlet" class="btn btn-primary">Start New Run</button>
       </div>
@@ -1505,7 +1512,7 @@
       }
     `;
     
-    const finalRating = Math.max(1, Math.min(100, rating));
+    const finalRating = Math.max(RATING_FLOOR, rating);
     
     const partialFields = {
       [RATING_CUSTOM_FIELD_KEY]: finalRating
@@ -1566,58 +1573,59 @@
   // Scenes with more battle history have more "established" ratings and change more slowly
   function getKFactor(battleCount) {
     const count = battleCount || 0;   // Handle null/undefined
-    if (count < 3) return 12;       // New: volatile, find true rating fast
-    if (count < 8) return 8;        // Settling: moderate changes
-    if (count < 15) return 6;       // Established: smaller changes
-    return 4;                       // Very established: stable rating
+    if (count < 8) return 48;        // New: highly volatile provisional phase
+    if (count < 16) return 32;       // Provisional/newly established
+    if (count < 31) return 24;       // Moderate history
+    return 16;                       // Very established: stable rating
   }
 
   function handleComparison(winnerId, loserId, winnerCurrentRating, loserCurrentRating, winnerBattleCount = 0, loserBattleCount = 0, loserRank = null) {
     const winnerRating = winnerCurrentRating || DEFAULT_RATING;
     const loserRating = loserCurrentRating || DEFAULT_RATING;
     
-    const ratingDiff = loserRating - winnerRating;
-    const expectedWinner = 1 / (1 + Math.pow(10, ratingDiff / 40));
+    let winnerGain = 0;
+    let loserLoss = 0;
     
-    let winnerGain = 0, loserLoss = 0;
+    console.log(`[Stash Battle] 📊 Chess ELO Input: mode=${currentMode} winner=${winnerId}(rating=${winnerCurrentRating || 'Unrated'}, ELO=${winnerRating}, battleCount=${winnerBattleCount}) loser=${loserId}(rating=${loserCurrentRating || 'Unrated'}, ELO=${loserRating}, battleCount=${loserBattleCount})`);
     
-    console.log(`[Stash Battle] 📊 ELO Input: mode=${currentMode} winner=${winnerId}(raw=${winnerCurrentRating}, used=${winnerRating}, battleCount=${winnerBattleCount}) loser=${loserId}(raw=${loserCurrentRating}, used=${loserRating}, battleCount=${loserBattleCount}) loserRank=${loserRank}`);
-    console.log(`[Stash Battle] 📊 ELO Math: ratingDiff=${ratingDiff} expectedWinner=${expectedWinner.toFixed(4)}`);
-
+    // Standard ELO formula for Winner
+    const ratingDiffWinner = loserRating - winnerRating;
+    const expectedWinner = 1 / (1 + Math.pow(10, ratingDiffWinner / 400));
+    const winnerK = getKFactor(winnerBattleCount);
+    winnerGain = Math.round(winnerK * (1 - expectedWinner));
+    if (winnerGain < 1) winnerGain = 1;
+    console.log(`[Stash Battle] 📊 Winner ELO: battleCount=${winnerBattleCount} ELO=${winnerRating} expectedWinner=${expectedWinner.toFixed(4)} K=${winnerK} winnerGain=${winnerGain}`);
+    
+    // Standard ELO formula for Loser
+    const ratingDiffLoser = winnerRating - loserRating;
+    const expectedLoser = 1 / (1 + Math.pow(10, ratingDiffLoser / 400));
+    const loserK = getKFactor(loserBattleCount);
+    loserLoss = Math.round(loserK * expectedLoser);
+    if (loserLoss < 1) loserLoss = 1;
+    console.log(`[Stash Battle] 📊 Loser ELO: battleCount=${loserBattleCount} ELO=${loserRating} expectedLoser=${expectedLoser.toFixed(4)} K=${loserK} loserLoss=${loserLoss}`);
+    
+    // Special modifications for other modes (Gauntlet/Champion specific logic)
     if (currentMode === "gauntlet" || currentMode === "champion") {
       const isChampionWinner = gauntletChampion && winnerId === gauntletChampion.id;
       const isFallingWinner = gauntletFalling && gauntletFallingScene && winnerId === gauntletFallingScene.id;
       const isChampionLoser = gauntletChampion && loserId === gauntletChampion.id;
       const isFallingLoser = gauntletFalling && gauntletFallingScene && loserId === gauntletFallingScene.id;
       
-      console.log(`[Stash Battle] 📊 Roles: championId=${gauntletChampion?.id} fallingId=${gauntletFallingScene?.id} isChampionWinner=${isChampionWinner} isFallingWinner=${isFallingWinner} isChampionLoser=${isChampionLoser} isFallingLoser=${isFallingLoser}`);
-
-      if (isChampionWinner || isFallingWinner) {
-        const kFactor = getKFactor(winnerBattleCount);
-        winnerGain = Math.max(1, Math.round(kFactor * (1 - expectedWinner)));
-        console.log(`[Stash Battle] 📊 Winner gain: K=${kFactor} raw=${(kFactor * (1 - expectedWinner)).toFixed(2)} gain=${winnerGain}`);
-      }
-      if (isFallingLoser) {
-        const kFactor = getKFactor(loserBattleCount);
-        loserLoss = Math.max(1, Math.round(kFactor * expectedWinner));
-        console.log(`[Stash Battle] 📊 Falling loser loss: K=${kFactor} raw=${(kFactor * expectedWinner).toFixed(2)} loss=${loserLoss}`);
-      }
+      console.log(`[Stash Battle] 📊 Gauntlet/Champion Roles: isChampionWinner=${isChampionWinner} isFallingWinner=${isFallingWinner} isChampionLoser=${isChampionLoser} isFallingLoser=${isFallingLoser}`);
       
+      if (!isChampionWinner && !isFallingWinner) {
+        winnerGain = 0;
+      }
+      if (!isFallingLoser) {
+        loserLoss = 0;
+      }
       if (loserRank === 1 && !isChampionLoser && !isFallingLoser) {
         loserLoss = 1;
-        console.log(`[Stash Battle] 📊 Rank #1 dethrone: loserLoss forced to 1`);
       }
-    } else {
-      const winnerK = getKFactor(winnerBattleCount);
-      const loserK = getKFactor(loserBattleCount);
-      
-      winnerGain = Math.max(1, Math.round(winnerK * (1 - expectedWinner)));
-      loserLoss = Math.max(1, Math.round(loserK * expectedWinner));
-      console.log(`[Stash Battle] 📊 Swiss ELO: winnerK=${winnerK} loserK=${loserK} winnerGain=${winnerGain} loserLoss=${loserLoss}`);
     }
     
-    const newWinnerRating = Math.min(100, Math.max(1, winnerRating + winnerGain));
-    const newLoserRating = Math.min(100, Math.max(1, loserRating - loserLoss));
+    const newWinnerRating = Math.max(RATING_FLOOR, winnerRating + winnerGain);
+    const newLoserRating = Math.max(RATING_FLOOR, loserRating - loserLoss);
     
     const winnerChange = newWinnerRating - winnerRating;
     const loserChange = newLoserRating - loserRating;
@@ -1637,7 +1645,7 @@
   // Called when gauntlet champion loses - place them one below the winner
   function finalizeGauntletLoss(championId, winnerRating, battleCount = null) {
     // Set champion rating to just below the scene that beat them
-    const newRating = Math.max(1, winnerRating - 1);
+    const newRating = Math.max(RATING_FLOOR, winnerRating - 1);
     updateSceneRatingAndCount(championId, newRating, battleCount);
     return newRating;
   }
@@ -1679,7 +1687,15 @@
     const screenshotPath = scene.paths ? scene.paths.screenshot : null;
     const previewPath = scene.paths ? scene.paths.preview : null;
     const rating = getSceneRating(scene);
-    const stashRating = rating ? `${rating}/100` : "Unrated";
+    const count = getSceneBattleCount(scene);
+    let stashRating;
+    if (rating === null || count === 0) {
+      stashRating = "Unrated";
+    } else if (count < 8) {
+      stashRating = `${rating}?`;
+    } else {
+      stashRating = `${rating}`;
+    }
     
     // Handle numeric ranks and string ranks
     let rankDisplay = '';
@@ -2057,7 +2073,7 @@
         if (winnerId === gauntletFallingScene.id) {
           // Falling scene won - found their floor!
           // Set their rating to just above the scene they beat
-          const finalRating = Math.min(100, loserRating + 1);
+          const finalRating = loserRating + 1;
           console.log(`[Stash Battle] 📊 Falling scene found floor: loserRating=${loserRating} → finalRating=${finalRating}`);
           const newFallingCount = getSceneBattleCount(gauntletFallingScene) + 1;
           updateSceneRatingAndCount(gauntletFallingScene.id, finalRating, newFallingCount);
@@ -2241,20 +2257,23 @@
 
     // Animate the rating counting
     let currentDisplay = oldRating;
-    const step = isWinner ? 1 : -1;
-    const totalSteps = Math.abs(change);
-    let stepCount = 0;
+    const changeAmount = newRating - oldRating;
+    const duration = 800; // Animation duration in ms
+    const intervalTime = 30; // 30ms interval
+    const totalTicks = duration / intervalTime;
+    const increment = changeAmount / totalTicks;
+    let tickCount = 0;
     
     const interval = setInterval(() => {
-      stepCount++;
-      currentDisplay += step;
-      ratingDisplay.textContent = currentDisplay;
+      tickCount++;
+      currentDisplay += increment;
+      ratingDisplay.textContent = Math.round(currentDisplay);
       
-      if (stepCount >= totalSteps) {
+      if (tickCount >= totalTicks) {
         clearInterval(interval);
         ratingDisplay.textContent = newRating;
       }
-    }, 50);
+    }, intervalTime);
 
     // Remove overlay after animation
     setTimeout(() => {
