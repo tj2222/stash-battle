@@ -54,6 +54,7 @@
   let totalScenesCount = 0; // Total scenes for position display
   let disableChoice = false; // Track when inputs should be disabled to prevent multiple events
   let savedFilterParams = ""; // Store URL filter params to detect changes
+  let openedFromSceneId = null; // Track scene ID when modal is opened from an individual scene page
 
   // toggle: should scene2/opponents obey the same filter as scene1?
   // default is true (apply filter to both sides); user can override via UI.
@@ -634,6 +635,19 @@
     window.open(url, '_blank');
   }
 
+  // Get current scene ID from pathname if on an individual scene page
+  function getCurrentSceneId() {
+    const path = window.location.pathname;
+    const match = path.match(/^\/scenes\/([a-zA-Z0-9_-]+)/);
+    if (match) {
+      const id = match[1];
+      if (id && id !== "scenes") {
+        return id;
+      }
+    }
+    return null;
+  }
+
   // ============================================
   // URL FILTER PARSING
   // ============================================
@@ -1116,6 +1130,20 @@
     console.log("[Stash Battle] 📋 Fetching all scenes for gauntlet...");
     const allResult = await getAllScenesCached();
     const allScenes = allResult.scenes || [];
+
+    // Use the current page scene as champion if we opened from a scene page
+    if (openedFromSceneId) {
+      const currentScene = allScenes.find(s => String(s.id) === String(openedFromSceneId));
+      if (currentScene) {
+        if (!gauntletChampion || String(gauntletChampion.id) !== String(openedFromSceneId)) {
+          console.log(`[Stash Battle] 🎯 Initializing gauntlet champion to current page scene: ${currentScene.id}`);
+          resetGauntletState();
+          gauntletChampion = currentScene;
+        }
+      }
+      openedFromSceneId = null; // Clear so subsequent loading doesn't force it
+    }
+
     // compute filtered list once (used for left side and, optionally, for opponents)
     let filteredScenes = hasFilter
       ? (await getFilteredScenesCached(searchParams, sceneFilter)).scenes || []
@@ -1220,16 +1248,24 @@
 
     // Champion exists - find next opponent from the chosen opponent pool
     const championIndex = opponentPool.findIndex(s => s.id === gauntletChampion.id);
+    let virtualIndex = championIndex;
+    if (virtualIndex === -1) {
+      const champRating = getSceneRating(gauntletChampion) || DEFAULT_RATING;
+      virtualIndex = opponentPool.findIndex(s => (getSceneRating(s) || 0) < champRating);
+      if (virtualIndex === -1) {
+        virtualIndex = opponentPool.length;
+      }
+    }
     
     // Update champion rank (1-indexed, so +1)
-    gauntletChampionRank = championIndex >= 0 ? championIndex + 1 : 1;
+    gauntletChampionRank = virtualIndex + 1;
     
     // Find opponents above champion that haven't been defeated
     const remainingOpponents = opponentPool.filter((s, idx) => {
       if (s.id === gauntletChampion.id) return false;
       if (gauntletDefeated.includes(s.id)) return false;
       // Only scenes ranked higher (lower index) or same rating
-      return idx < championIndex || (getSceneRating(s) || 0) >= (getSceneRating(gauntletChampion) || 0);
+      return idx < virtualIndex || (getSceneRating(s) || 0) >= (getSceneRating(gauntletChampion) || 0);
     });
     
     // If no opponents left, champion has truly won
@@ -1251,7 +1287,7 @@
     
     return { 
       scenes: [gauntletChampion, nextOpponent], 
-      ranks: [championIndex + 1, nextOpponentIndex + 1],
+      ranks: [virtualIndex + 1, nextOpponentIndex + 1],
       isVictory: false,
       isFalling: false
     };
@@ -1269,6 +1305,20 @@
     console.log("[Stash Battle] 📋 Fetching all scenes for champion...");
     const allResult = await getAllScenesCached();
     const allScenes = allResult.scenes || [];
+
+    // Use the current page scene as champion if we opened from a scene page
+    if (openedFromSceneId) {
+      const currentScene = allScenes.find(s => String(s.id) === String(openedFromSceneId));
+      if (currentScene) {
+        if (!gauntletChampion || String(gauntletChampion.id) !== String(openedFromSceneId)) {
+          console.log(`[Stash Battle] 🎯 Initializing champion to current page scene: ${currentScene.id}`);
+          resetGauntletState();
+          gauntletChampion = currentScene;
+        }
+      }
+      openedFromSceneId = null; // Clear so subsequent loading doesn't force it
+    }
+
     // precompute filtered list and opponent/rank pools
     let filteredScenes = hasFilter
       ? (await getFilteredScenesCached(searchParams, sceneFilter)).scenes || []
@@ -1319,14 +1369,22 @@
 
     // Champion exists - find next opponent from the chosen pool
     const championIndex = opponentPool.findIndex(s => s.id === gauntletChampion.id);
+    let virtualIndex = championIndex;
+    if (virtualIndex === -1) {
+      const champRating = getSceneRating(gauntletChampion) || DEFAULT_RATING;
+      virtualIndex = opponentPool.findIndex(s => (getSceneRating(s) || 0) < champRating);
+      if (virtualIndex === -1) {
+        virtualIndex = opponentPool.length;
+      }
+    }
     
-    gauntletChampionRank = championIndex >= 0 ? championIndex + 1 : 1;
+    gauntletChampionRank = virtualIndex + 1;
     
     // Find opponents above champion that haven't been defeated
     const remainingOpponents = opponentPool.filter((s, idx) => {
       if (s.id === gauntletChampion.id) return false;
       if (gauntletDefeated.includes(s.id)) return false;
-      return idx < championIndex || (getSceneRating(s) || 0) >= (getSceneRating(gauntletChampion) || 0);
+      return idx < virtualIndex || (getSceneRating(s) || 0) >= (getSceneRating(gauntletChampion) || 0);
     });
     
     // If no opponents left, champion has won!
@@ -1347,7 +1405,7 @@
     
     return { 
       scenes: [gauntletChampion, nextOpponent], 
-      ranks: [championIndex + 1, nextOpponentIndex + 1],
+      ranks: [virtualIndex + 1, nextOpponentIndex + 1],
       isVictory: false
     };
   }
@@ -2279,6 +2337,15 @@
     const hasState = loadState();
     console.log(`[Stash Battle] 📋 LocalStorage state: ${hasState ? 'found' : 'none'}`);
     
+    // Set openedFromSceneId if we are on a scene page
+    const currentSceneId = getCurrentSceneId();
+    if (currentSceneId) {
+      openedFromSceneId = currentSceneId;
+      console.log(`[Stash Battle] 🎯 Battle modal opened from scene page with ID: ${openedFromSceneId}`);
+    } else {
+      openedFromSceneId = null;
+    }
+    
     // Check if URL filter params have changed - if so, reset state
     const currentFilterParams = window.location.search;
     const filtersChanged = hasState && savedFilterParams !== currentFilterParams;
@@ -2316,8 +2383,15 @@
       const modalContent = existingModal.querySelector(".pwr-modal-content");
       if (modalContent) modalContent.focus();
       
-      // If filters changed or no pair, load new content
-      if (filtersChanged || !currentPair.left || !currentPair.right) {
+      // If filters changed, no pair, or we opened from a different scene and need to set new champion
+      const shouldReload = filtersChanged || 
+                           !currentPair.left || 
+                           !currentPair.right ||
+                           (openedFromSceneId && 
+                            (currentMode === "gauntlet" || currentMode === "champion") && 
+                            (!gauntletChampion || String(gauntletChampion.id) !== String(openedFromSceneId)));
+      
+      if (shouldReload) {
         loadNewPair();
       }
       // Otherwise the existing content is still valid
@@ -2374,6 +2448,14 @@
           const actionsEl = document.querySelector(".pwr-actions");
           if (actionsEl) actionsEl.style.display = "";
           
+          // Re-initialize openedFromSceneId when switching to gauntlet/champion mode
+          if (currentMode === "gauntlet" || currentMode === "champion") {
+            const currentSceneId = getCurrentSceneId();
+            if (currentSceneId) {
+              openedFromSceneId = currentSceneId;
+            }
+          }
+          
           // Load new pair in new mode
           loadNewPair();
           saveState();
@@ -2408,6 +2490,9 @@
         }
         if(disableChoice) return
         disableChoice = true;
+        
+        openedFromSceneId = null; // Clear on skip so a random scene is chosen instead of the page scene
+        
         // Reset state on skip
         if (currentMode === "gauntlet" || currentMode === "champion") {
           resetGauntletState();
@@ -2455,8 +2540,17 @@
 
     // Load initial comparison or restore saved pair
     if (hasState && currentPair.left && currentPair.right && !filtersChanged) {
-      console.log(`[Stash Battle] 📂 Restoring saved pair from localStorage (Scene ${currentPair.left.id} vs Scene ${currentPair.right.id})`);
-      restoreCurrentPair();
+      const shouldStartNewGauntlet = openedFromSceneId && 
+                                    (currentMode === "gauntlet" || currentMode === "champion") && 
+                                    (!gauntletChampion || String(gauntletChampion.id) !== String(openedFromSceneId));
+      
+      if (shouldStartNewGauntlet) {
+        console.log("[Stash Battle] 🆕 Starting new gauntlet/champion run with current page scene");
+        loadNewPair();
+      } else {
+        console.log(`[Stash Battle] 📂 Restoring saved pair from localStorage (Scene ${currentPair.left.id} vs Scene ${currentPair.right.id})`);
+        restoreCurrentPair();
+      }
     } else {
       console.log(`[Stash Battle] 🆕 No saved pair or filters changed, loading new pair...`);
       loadNewPair();
@@ -2517,6 +2611,9 @@
         }
         if(disableChoice) return;
         disableChoice = true;
+        
+        openedFromSceneId = null; // Clear on skip so a random scene is chosen instead of the page scene
+        
         if (currentMode === "gauntlet" || currentMode === "champion") {
           resetGauntletState();
           saveState();
