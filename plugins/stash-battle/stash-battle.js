@@ -1562,10 +1562,10 @@
   // RATING LOGIC
   // ============================================
 
-  // Dynamic K-factor based on play_count (similar to chess ELO for new vs established players)
-  // Scenes with more plays have more "established" ratings and change more slowly
-  function getKFactor(playCount) {
-    const count = playCount || 0;   // Handle null/undefined
+  // Dynamic K-factor based on battle count (similar to chess ELO for new vs established players)
+  // Scenes with more battle history have more "established" ratings and change more slowly
+  function getKFactor(battleCount) {
+    const count = battleCount || 0;   // Handle null/undefined
     if (count < 3) return 12;       // New: volatile, find true rating fast
     if (count < 8) return 8;        // Settling: moderate changes
     if (count < 15) return 6;       // Established: smaller changes
