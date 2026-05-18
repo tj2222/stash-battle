@@ -25,6 +25,7 @@ The plugin is a single IIFE (`stash-battle.js`, ~2600 lines) injected into the S
 2. `addFloatingButton()` injects a nav item on `/scenes` pages
 3. A `MutationObserver` re-adds the button on SPA navigation (Stash uses React Router)
 4. Clicking the button opens `openRankingModal()` which renders the full battle UI
+5. **Scene Page Auto-Initialization**: If the modal is opened while viewing an individual scene page (e.g., `/scenes/<id>`), the plugin captures the active scene's ID. Selecting Gauntlet or Champion modes will automatically start a new run using this scene as the challenger/champion. Even if URL filters exclude it, a rating-based `virtualIndex` places it correctly in the ranked ladder.
 
 ### Core State
 
@@ -72,7 +73,7 @@ if filterOpponents AND hasFilter → opponentPool = filteredScenes
 else → opponentPool = allScenes (rated only)
 ```
 
-**Critical behavior**: When the opponent pool comes from `allScenes`, unrated scenes are **excluded** (`rating100 != null` filter). This prevents unrated scenes from appearing as right-side opponents. If no rated scenes exist yet (bootstrap), it falls back to `allScenes` including unrated.
+**Critical behavior**: When the opponent pool comes from `allScenes`, unrated scenes are **excluded** (filtered to check that the custom field `battle-rating` is not `null` and `battle-count` is greater than 0). This prevents unrated scenes from appearing as right-side opponents. If no rated scenes exist yet (bootstrap), it falls back to `allScenes` including unrated.
 
 **Exception**: When `filterOpponents` is true and a filter is active, the filtered pool is used as-is for both sides — unrated scenes may appear on the right if the filter includes them. This is intentional for scenarios like filtering for "unrated only" on both sides to bootstrap ratings.
 
@@ -127,32 +128,35 @@ When all filtered scenes have been processed (`getNextFilteredScene` returns `nu
 ## Rating / ELO System
 
 ### Scale
-Ratings are integers from **1 to 100**. Clamped with `Math.min(100, Math.max(1, ...))`.
+Ratings are standard chess-style Elo points. Clamped with a rating floor of **100** and no ceiling.
 
 ### Unrated Scenes
-Unrated scenes (`rating100 = null`) are treated as rating **1** — they start at the bottom and earn their way up. This prevents the jarring behavior of unrated scenes jumping to mid-range after a single win.
+Unrated scenes start with a default rating of **1500** (`DEFAULT_RATING`). In the UI, they display as `"Unrated"` until their first battle. In Swiss matchmaking, unrated scenes are paired against opponents close to `1500` to find their true ranking quickly.
 
 ### ELO Formula
 
 ```
-ratingDiff = loserRating - winnerRating
-expectedWinner = 1 / (1 + 10^(ratingDiff / 40))
-winnerGain = max(1, round(K * (1 - expectedWinner)))
-loserLoss = max(1, round(K * expectedWinner))
+ratingDiffWinner = loserRating - winnerRating
+expectedWinner = 1 / (1 + 10^(ratingDiffWinner / 400))
+winnerGain = max(1, round(winnerK * (1 - expectedWinner)))
+
+ratingDiffLoser = winnerRating - loserRating
+expectedLoser = 1 / (1 + 10^(ratingDiffLoser / 400))
+loserLoss = max(1, round(loserK * expectedLoser))
 ```
 
-The divisor of 40 (instead of standard chess 400) is because the rating scale is 1-100 instead of ~800-2800.
+The divisor of 400 represents standard chess Elo calculations.
 
 ### K-Factor (Dynamic)
 
-Based on `play_count` — scenes with more plays have more stable ratings:
+Based on the scene's `battleCount` — newer scenes have higher K-factors for high volatility, while established ones stabilize:
 
-| Play Count | K-Factor | Category |
+| Battle Count | K-Factor | Category |
 |---|---|---|
-| < 3 | 12 | New — volatile, find true rating fast |
-| < 8 | 8 | Settling — moderate changes |
-| < 15 | 6 | Established — smaller changes |
-| ≥ 15 | 4 | Very established — stable |
+| < 8 | 48 | New / Provisional — extremely volatile |
+| 8 to 15 | 32 | Settling — moderate changes |
+| 16 to 30 | 24 | Established — smaller changes |
+| ≥ 31 | 16 | Very established — highly stable |
 
 ### Mode-Specific Rating Behavior
 
@@ -173,7 +177,7 @@ The default mode. Pairs scenes with similar ratings for meaningful comparisons.
 **Pairing logic**:
 1. Pick the next scene from the shuffled filtered pool (left side)
 2. Find its position in the opponent pool (sorted by rating DESC)
-3. If the scene isn't in the opponent pool (unrated), position it at the end (lowest ranked)
+3. If the scene isn't in the opponent pool (unrated), position it where `DEFAULT_RATING` (`1500`) would sit in the opponent pool.
 4. Collect candidates within ±10 of that position
 5. If no candidates found, **expand the search** (double the reach) until candidates exist
 6. Pick randomly from candidates
@@ -206,7 +210,7 @@ A climb-the-ladder mode where a challenger fights their way up from the bottom.
 **Falling mode outcomes**:
 - Falling scene **wins**: Found their floor. Rating set to `loserRating + 1`. Placement screen shown.
 - Falling scene **loses**: Keep falling. Winner added to `gauntletDefeated`.
-- **Hits the bottom** (no opponents below): Rating set to `max(1, lastOpponent.rating - 1)` — one below whatever beat them last.
+- **Hits the bottom** (no opponents below): Rating set to `max(RATING_FLOOR, lastOpponent.rating - 1)` — one below whatever beat them last.
 
 **Victory**: When `remainingOpponents` is empty, the champion has conquered all scenes. Victory screen shown.
 
@@ -235,12 +239,14 @@ Clicking the **screenshot/thumbnail** opens the scene in a new tab, allowing use
 - Falling mode: `📍 Finding placement...` (string)
 - The badge slot accepts either type via the `streak` parameter on `createSceneCard`
 
+**Provisional indicator**: Displays a question mark `?` after the rating (e.g. `1548?`) if a scene has under 8 battles. Unrated scenes (0 battles) display as `"Unrated"`.
+
 ### Rating Animations
 
 After each battle, an overlay animates the rating change:
 - Green with `+X` for the winner
 - Red with `-X` for the loser
-- Count-up/count-down animation over ~500ms
+- Count-up/count-down animation runs dynamically over a fixed 800ms window, adjusting step count and tick speed depending on the magnitude of the Elo change so that large updates or minor changes complete synchronously.
 - Overlay removed after 1400ms, then new pair loads
 
 ### Victory / Placement Screens
@@ -288,7 +294,7 @@ All data comes from Stash's GraphQL API:
 
 - **`findScenes`** query: fetches scene lists with `per_page: -1`, sorted by rating DESC
 - **`sceneUpdate`** mutation: writes rating changes back to Stash
-- **Fragment fields**: `id`, `title`, `date`, `rating100`, `play_count`, `paths` (screenshot, preview), `files` (path, duration, resolution), `studio`, `performers`, `tags`
+- **Fragment fields**: `id`, `title`, `date`, `custom_fields`, `play_count`, `paths` (screenshot, preview), `files` (path, duration, resolution), `studio`, `performers`, `tags`
 
 ---
 
