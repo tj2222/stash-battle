@@ -9,6 +9,7 @@
 
   const RATING_CUSTOM_FIELD_KEY = "battle-rating";
   // const PLAY_COUNT_CUSTOM_FIELD_KEY = "battle-play-count"; // TODO later
+  const DEFAULT_RATING = 50;
 
   function getSceneRating(scene) {
     if (!scene) return null;
@@ -1130,7 +1131,7 @@
         const finalRank = opponentPool.length;
         const lastDefeatedById = gauntletDefeated[gauntletDefeated.length - 1];
         const lastOpponent = opponentPool.find(s => s.id === lastDefeatedById);
-        const finalRating = Math.max(1, (getSceneRating(lastOpponent) || 2) - 1);
+        const finalRating = Math.max(1, (getSceneRating(lastOpponent) || DEFAULT_RATING) - 1);
         updateSceneRating(gauntletFallingScene.id, finalRating);
         
         return {
@@ -1487,8 +1488,8 @@
   }
 
   function handleComparison(winnerId, loserId, winnerCurrentRating, loserCurrentRating, winnerPlayCount = 0, loserPlayCount = 0, loserRank = null) {
-    const winnerRating = winnerCurrentRating || 1;
-    const loserRating = loserCurrentRating || 1;
+    const winnerRating = winnerCurrentRating || DEFAULT_RATING;
+    const loserRating = loserCurrentRating || DEFAULT_RATING;
     
     const ratingDiff = loserRating - winnerRating;
     const expectedWinner = 1 / (1 + Math.pow(10, ratingDiff / 40));
@@ -1948,9 +1949,9 @@
     
     const winnerScene = winnerId === currentPair.left.id ? currentPair.left : currentPair.right;
     const loserScene = loserId === currentPair.left.id ? currentPair.left : currentPair.right;
-    const winnerRating = getSceneRating(winnerScene) || 1;
-    const loserRating = getSceneRating(loserScene) || 1;
-    const loserDisplayRating = getSceneRating(loserScene) || 0;
+    const winnerRating = getSceneRating(winnerScene) || DEFAULT_RATING;
+    const loserRating = getSceneRating(loserScene) || DEFAULT_RATING;
+    const loserDisplayRating = getSceneRating(loserScene) || DEFAULT_RATING;
     const loserSide = winnerId === currentPair.left.id ? "right" : "left";
     const loserCard = document.querySelector(`.pwr-scene-card[data-side="${loserSide}"]`);
     
