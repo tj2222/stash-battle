@@ -86,7 +86,7 @@ Set from `opponentPool.length` (not `allScenes.length`), so the "Rank #X of Y" d
 
 ### Three Layers
 
-1. **Memory cache** (`memoryCache`) — instant, lives for the session
+1. **Memory cache** (`memoryCache` + `detailsCache`) — instant, lives for the session. `memoryCache` stores the minimal scene list; `detailsCache` stores on-demand loaded detailed scene objects.
 2. **IndexedDB** (`stash-battle-cache` DB) — survives page reloads
 3. **Network** (GraphQL) — source of truth, slowest
 
@@ -102,6 +102,27 @@ On cache hit, the data is returned immediately. If the cache is older than `CACH
 ### `filterKey`
 
 A JSON string of the current filter parameters. Stored alongside the filtered cache to detect when the filter has changed and the cache is stale.
+
+---
+
+## Lazy-Loading Scene Details
+
+To support extremely large Stash libraries (160k+ scenes), the plugin implements an optimized **lazy-loading minimal data architecture**. 
+
+### 1. Scene Fragments Division
+- **`MINIMAL_SCENE_FRAGMENT`**: Requests only `id` and `custom_fields` (Elo `battle-rating` and `battle-count`). This completely avoids expensive SQL database joins (studios, performers, tags, files) during startup, allowing bootstrap loading to complete in under **~500ms** even for 160k scenes.
+- **`FULL_SCENE_FRAGMENT`**: Requests all rich visual metadata (screenshot paths, duration, studio, performers, tags, play count) required for rendering cards.
+
+### 2. On-Demand Fetching & Hydration
+When a comparison pair `scenes[0]` and `scenes[1]` is chosen for a matchup, they are loaded with minimal fields. Before rendering, `loadNewPair()` triggers `fetchSceneDetails(id)` in parallel to retrieve the full metadata. 
+
+### 3. Progressive Pre-Fetching
+To eliminate loading delay between matchups:
+- **Left-Side Scene Pre-fetching**: In Swiss mode, the *next* left-side scene is deterministic (the next index in `shuffledFilteredScenes`). The plugin proactively pre-fetches and caches this scene's details in the background while the user compares the current pair. In Gauntlet/Champion modes, the active champion is already fully loaded and cached in memory.
+- **Opponent On-Demand Shimmers**: Since opponents are chosen randomly from a pool, they are queried on-demand. These queries typically execute in under ~10-20ms. Elegant **CSS shimmer placeholders** are rendered on the cards during this brief interval for a premium, responsive feel.
+
+### 4. Details Cache Syncing
+When a battle completes and ELO rating is updated, `updateSceneInCache()` modifies the Elo values in `allScenes`, `filteredScenes`, and `detailsCache` simultaneously. This prevents display of stale ratings if a scene appears again in the same session.
 
 ---
 
@@ -292,9 +313,11 @@ The plugin reads Stash's URL filter parameters to determine which scenes to show
 
 All data comes from Stash's GraphQL API:
 
-- **`findScenes`** query: fetches scene lists with `per_page: -1`, sorted by rating DESC
+- **`findScenes`** query: fetches minimal scene list with `per_page: -1` using the `MINIMAL_SCENE_FRAGMENT`.
+- **`findScene`** query (details lookup): fetches complete detailed metadata for a single scene using `FULL_SCENE_FRAGMENT` on-demand.
 - **`sceneUpdate`** mutation: writes rating changes back to Stash
-- **Fragment fields**: `id`, `title`, `date`, `custom_fields`, `play_count`, `paths` (screenshot, preview), `files` (path, duration, resolution), `studio`, `performers`, `tags`
+- **`MINIMAL_SCENE_FRAGMENT` fields**: `id`, `custom_fields`
+- **`FULL_SCENE_FRAGMENT` fields**: `id`, `title`, `date`, `custom_fields`, `play_count`, `paths` (screenshot, preview), `files` (path, duration), `studio`, `performers`, `tags`
 
 ---
 

@@ -56,6 +56,7 @@
   let disableChoice = false; // Track when inputs should be disabled to prevent multiple events
   let savedFilterParams = ""; // Store URL filter params to detect changes
   let openedFromSceneId = null; // Track scene ID when modal is opened from an individual scene page
+  const detailsCache = new Map(); // Cache of detailed scene objects (on-demand loaded)
 
   // toggle: should scene2/opponents obey the same filter as scene1?
   // default is true (apply filter to both sides); user can override via UI.
@@ -196,8 +197,12 @@
 
   // Clear all cached scenes (for manual refresh)
   async function clearSceneCache() {
+    // Clear in-memory caches synchronously first
+    memoryCache = { allScenes: null, filteredScenes: null, filterKey: null, timestamp: null };
+    detailsCache.clear();
+    console.log("[Stash Battle] 🗑️ Memory caches cleared synchronously. Clearing IndexedDB...");
+
     try {
-      console.log("[Stash Battle] 🗑️ Clearing all scene caches...");
       const db = await openCacheDB();
       return new Promise((resolve, reject) => {
         const transaction = db.transaction(CACHE_STORE_NAME, "readwrite");
@@ -205,7 +210,6 @@
         const request = store.clear();
         
         request.onsuccess = () => {
-          memoryCache = { allScenes: null, filteredScenes: null, filterKey: null, timestamp: null };
           console.log("[Stash Battle] ✅ All caches cleared (memory + IndexedDB)");
           resolve();
         };
@@ -213,12 +217,16 @@
         transaction.oncomplete = () => db.close();
       });
     } catch (e) {
-      console.error("[Stash Battle] ❌ Cache clear error:", e);
+      console.error("[Stash Battle] ❌ IndexedDB clear error:", e);
     }
   }
 
   // Clear just the filtered scenes cache (for auto-refresh after pool exhaustion)
   async function clearFilteredCache() {
+    // Clear filtered memory caches synchronously first
+    memoryCache.filteredScenes = null;
+    memoryCache.filterKey = null;
+
     try {
       const db = await openCacheDB();
       return new Promise((resolve, reject) => {
@@ -227,8 +235,6 @@
         const request = store.delete("filtered-scenes");
         
         request.onsuccess = () => {
-          memoryCache.filteredScenes = null;
-          memoryCache.filterKey = null;
           console.log("[Stash Battle] 🗑️ Filtered cache cleared (memory + IndexedDB)");
           resolve();
         };
@@ -237,9 +243,6 @@
       });
     } catch (e) {
       console.error("[Stash Battle] ❌ Filtered cache clear error:", e);
-      // Still clear memory cache even if IndexedDB fails
-      memoryCache.filteredScenes = null;
-      memoryCache.filterKey = null;
     }
   }
 
@@ -486,6 +489,15 @@
         }
       }
     }
+
+    // Also update in detailsCache if present (ensures UI doesn't show stale info on refresh)
+    if (detailsCache.has(sceneId)) {
+      const scene = detailsCache.get(sceneId);
+      setSceneRating(scene, newRating);
+      if (newBattleCount !== null) {
+        setSceneBattleCount(scene, newBattleCount);
+      }
+    }
   }
 
   // ============================================
@@ -565,7 +577,12 @@
     return result.data;
   }
 
-  const SCENE_FRAGMENT = `
+  const MINIMAL_SCENE_FRAGMENT = `
+    id
+    custom_fields
+  `;
+
+  const FULL_SCENE_FRAGMENT = `
     id
     title
     date
@@ -601,11 +618,40 @@
       findScenes(filter: $filter, scene_filter: $scene_filter) {
         count
         scenes {
-          ${SCENE_FRAGMENT}
+          ${MINIMAL_SCENE_FRAGMENT}
         }
       }
     }
   `;
+
+  const FIND_SCENE_DETAILS_QUERY = `
+    query FindSceneDetails($id: ID!) {
+      findScene(id: $id) {
+        ${FULL_SCENE_FRAGMENT}
+      }
+    }
+  `;
+
+  async function fetchSceneDetails(sceneId) {
+    if (!sceneId) return null;
+    
+    // Check in-memory cache first
+    if (detailsCache.has(sceneId)) {
+      return detailsCache.get(sceneId);
+    }
+    
+    try {
+      const data = await graphqlQuery(FIND_SCENE_DETAILS_QUERY, { id: sceneId });
+      const details = data.findScene;
+      if (details) {
+        detailsCache.set(sceneId, details);
+      }
+      return details;
+    } catch (e) {
+      console.error(`[Stash Battle] Error fetching scene details for ID ${sceneId}:`, e);
+      return null;
+    }
+  }
 
   async function fetchScenes(filter, sceneFilter = null) {
     const data = await graphqlQuery(FIND_SCENES_QUERY, {
@@ -1891,6 +1937,23 @@
     }
   }
 
+  function getNextDeterministicScene() {
+    if (shuffledFilteredScenes && shuffleIndex < shuffledFilteredScenes.length) {
+      return shuffledFilteredScenes[shuffleIndex];
+    }
+    return null;
+  }
+
+  function triggerPrefetch() {
+    if (currentMode === "swiss") {
+      const nextScene = getNextDeterministicScene();
+      if (nextScene) {
+        console.log(`[Stash Battle] 🚀 Pre-fetching next left-side scene ${nextScene.id}...`);
+        fetchSceneDetails(nextScene.id);
+      }
+    }
+  }
+
   async function loadNewPair() {
     disableChoice = false;
     const comparisonArea = document.getElementById("pwr-comparison-area");
@@ -1899,11 +1962,42 @@
     console.log(`[Stash Battle] 🎮 Loading new pair (mode: ${currentMode})...`);
     const startTime = Date.now();
 
-    // Only show loading on first load (when empty or already showing loading)
-    if (!comparisonArea.querySelector('.pwr-vs-container')) {
-      const hasCache = memoryCache.allScenes !== null;
-      comparisonArea.innerHTML = `<div class="pwr-loading">${hasCache ? 'Loading scenes...' : 'Loading and caching scenes (first load may take a moment)...'}</div>`;
-    }
+    // Show beautiful card shimmer loaders on loading
+    comparisonArea.innerHTML = `
+      <div class="pwr-vs-container">
+        <div class="pwr-scene-card pwr-shimmer" data-side="left">
+          <div class="pwr-scene-image-container">
+            <div class="pwr-scene-image pwr-no-image">Loading screenshot...</div>
+          </div>
+          <div class="pwr-scene-body">
+            <div class="pwr-scene-info">
+              <div class="pwr-scene-title">Loading title...</div>
+              <div class="pwr-meta-item"></div>
+              <div class="pwr-meta-item"></div>
+              <div class="pwr-meta-item"></div>
+              <div class="pwr-meta-item"></div>
+            </div>
+          </div>
+        </div>
+        <div class="pwr-vs-divider">
+          <span class="pwr-vs-text">VS</span>
+        </div>
+        <div class="pwr-scene-card pwr-shimmer" data-side="right">
+          <div class="pwr-scene-image-container">
+            <div class="pwr-scene-image pwr-no-image">Loading screenshot...</div>
+          </div>
+          <div class="pwr-scene-body">
+            <div class="pwr-scene-info">
+              <div class="pwr-scene-title">Loading title...</div>
+              <div class="pwr-meta-item"></div>
+              <div class="pwr-meta-item"></div>
+              <div class="pwr-meta-item"></div>
+              <div class="pwr-meta-item"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
 
     try {
       let scenes;
@@ -1914,7 +2008,8 @@
         
         // Check for victory (champion reached #1)
         if (gauntletResult.isVictory) {
-          comparisonArea.innerHTML = createVictoryScreen(gauntletResult.scenes[0]);
+          const fullScene = await fetchSceneDetails(gauntletResult.scenes[0].id);
+          comparisonArea.innerHTML = createVictoryScreen(fullScene || gauntletResult.scenes[0]);
           
           // Hide the status banner and skip button
           const statusEl = document.getElementById("pwr-gauntlet-status");
@@ -1939,7 +2034,8 @@
         
         // Check for placement (falling scene hit bottom)
         if (gauntletResult.isPlacement) {
-          showPlacementScreen(gauntletResult.scenes[0], gauntletResult.placementRank, gauntletResult.placementRating);
+          const fullScene = await fetchSceneDetails(gauntletResult.scenes[0].id);
+          showPlacementScreen(fullScene || gauntletResult.scenes[0], gauntletResult.placementRank, gauntletResult.placementRating);
           return;
         }
         
@@ -1950,7 +2046,8 @@
         
         // Check for victory (champion beat everyone)
         if (championResult.isVictory) {
-          comparisonArea.innerHTML = createVictoryScreen(championResult.scenes[0]);
+          const fullScene = await fetchSceneDetails(championResult.scenes[0].id);
+          comparisonArea.innerHTML = createVictoryScreen(fullScene || championResult.scenes[0]);
           
           // Hide the skip button
           const actionsEl = document.querySelector(".pwr-actions");
@@ -1985,16 +2082,29 @@
         return;
       }
 
-      currentPair.left = scenes[0];
-      currentPair.right = scenes[1];
+      // Fetch the full details in parallel!
+      const [fullLeft, fullRight] = await Promise.all([
+        fetchSceneDetails(scenes[0].id),
+        fetchSceneDetails(scenes[1].id)
+      ]);
+
+      if (!fullLeft || !fullRight) {
+        throw new Error("Failed to load scene details from the database.");
+      }
+
+      currentPair.left = fullLeft;
+      currentPair.right = fullRight;
       currentRanks.left = ranks[0];
       currentRanks.right = ranks[1];
 
       const loadTime = Date.now() - startTime;
-      console.log(`[Stash Battle] ✅ Pair loaded in ${loadTime}ms: Scene ${scenes[0].id} (rank #${ranks[0]}) vs Scene ${scenes[1].id} (rank #${ranks[1]})`);
+      console.log(`[Stash Battle] ✅ Pair loaded & hydrated in ${loadTime}ms: Scene ${scenes[0].id} (rank #${ranks[0]}) vs Scene ${scenes[1].id} (rank #${ranks[1]})`);
 
-      renderPair(scenes, ranks);
+      renderPair([fullLeft, fullRight], ranks);
       saveState();
+
+      // Proactively pre-fetch next deterministic left-side scene in background
+      setTimeout(triggerPrefetch, 100);
     } catch (error) {
       console.error("[Stash Battle] Error loading scenes:", error);
       const isNoScenes = error.message.includes("No scenes") || error.message.includes("Not enough");
