@@ -471,22 +471,23 @@
     return true;
   }
 
-  // Update a scene's rating in the memory cache (keeps cache in sync after rating changes)
-  function updateSceneInCache(sceneId, newRating, newBattleCount = null) {
+  // Update a scene's rating in the memory cache and IndexedDB (keeps cache in sync after rating changes)
+  function updateSceneInCaches(sceneId, newRating, newBattleCount = null) {
     // Reposition in allScenes (keeps rankings accurate, scene stays for opponent pool)
     if (memoryCache.allScenes) {
       repositionSceneInArray(memoryCache.allScenes, sceneId, newRating, newBattleCount);
-      console.log(`[Stash Battle] 📝 Updated scene ${sceneId} rating to ${newRating} in memory cache`);
+      // Update IndexedDB for all-scenes
+      setCachedScenes("all-scenes", memoryCache.allScenes, memoryCache.allScenes.length);
+      console.log(`[Stash Battle] 📝 Updated scene ${sceneId} rating to ${newRating} in caches`);
     }
     
-    // Also update in filteredScenes if present (but don't remove - that's done separately)
+    // Also update and reposition in filteredScenes if present
     if (memoryCache.filteredScenes) {
-      const scene = memoryCache.filteredScenes.find(s => s.id === sceneId);
-      if (scene) {
-        setSceneRating(scene, newRating);
-        if (newBattleCount !== null) {
-          setSceneBattleCount(scene, newBattleCount);
-        }
+      repositionSceneInArray(memoryCache.filteredScenes, sceneId, newRating, newBattleCount);
+      console.log(`[Stash Battle] 📝 Updated scene ${sceneId} rating to ${newRating} in filtered cache`);
+      // Update IndexedDB for filtered-scenes
+      if (memoryCache.filterKey) {
+        setCachedScenesWithFilter("filtered-scenes", memoryCache.filteredScenes, memoryCache.filteredScenes.length, memoryCache.filterKey);
       }
     }
 
@@ -1787,8 +1788,7 @@
       console.log(`[Stash Battle] 📝 Updated scene ${sceneId} custom fields: rating=${finalRating}, battleCount=${battleCount}`);
 
       
-      // Update the in-memory cache to keep it in sync
-      updateSceneInCache(sceneId, finalRating, battleCount);
+      updateSceneInCaches(sceneId, finalRating, battleCount);
       
     } catch (e) {
       console.error(`[Stash Battle] Failed to update scene ${sceneId} custom fields:`, e);
