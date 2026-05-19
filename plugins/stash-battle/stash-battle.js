@@ -628,6 +628,44 @@
     }
   `;
 
+  const FIND_GROUPS_QUERY = `
+    query FindGroups($filter: FindFilterType) {
+      findGroups(filter: $filter) {
+        count
+        groups {
+          id
+          name
+        }
+      }
+    }
+  `;
+
+  const CREATE_GROUP_MUTATION = `
+    mutation CreateGroup($input: GroupCreateInput!) {
+      groupCreate(input: $input) {
+        id
+        name
+      }
+    }
+  `;
+
+  const FIND_SCENES_FOR_GROUP_SYNC_QUERY = `
+    query SyncFindScenes($filter: FindFilterType) {
+      findScenes(filter: $filter) {
+        scenes {
+          id
+          custom_fields
+          groups {
+            group {
+              id
+            }
+            scene_index
+          }
+        }
+      }
+    }
+  `;
+
   const FIND_SCENE_DETAILS_QUERY = `
     query FindSceneDetails($id: ID!) {
       findScene(id: $id) {
@@ -685,6 +723,17 @@
         </div>
         <div class="pwr-config-content">
           <div class="pwr-config-card">
+            <h3 class="pwr-card-title">Sync ELO to Group</h3>
+            <p class="pwr-card-desc">
+              Sync all rated scenes into a Stash Group called <strong>Stash Battle Rankings</strong>. 
+              The scenes will be ordered with the highest-rated scene as Scene 1.
+            </p>
+            <button id="pwr-sync-rankings-btn" class="btn btn-secondary">
+              🔄 Sync Rankings to Group
+            </button>
+            <div id="pwr-sync-progress-area"></div>
+          </div>
+          <div class="pwr-config-card">
             <h3 class="pwr-card-title">Reset All Ratings</h3>
             <p class="pwr-card-desc">
               Completely erase all custom ELO ratings and battle counts across your entire library. 
@@ -716,6 +765,13 @@
     if (resetBtn && ratedCount > 0) {
       resetBtn.addEventListener("click", () => {
         showResetConfirmationModal(ratedCount);
+      });
+    }
+
+    const syncBtn = comparisonArea.querySelector("#pwr-sync-rankings-btn");
+    if (syncBtn) {
+      syncBtn.addEventListener("click", () => {
+        executeRankingsSync();
       });
     }
   }
@@ -860,6 +916,208 @@
           </div>
         `;
       }
+      if (resetBtn) resetBtn.disabled = false;
+      if (backBtn) backBtn.disabled = false;
+    }
+  }
+
+  async function executeRankingsSync() {
+    const syncBtn = document.getElementById("pwr-sync-rankings-btn");
+    const resetBtn = document.getElementById("pwr-reset-ratings-btn");
+    const backBtn = document.getElementById("pwr-config-back-btn");
+    const progressArea = document.getElementById("pwr-sync-progress-area");
+
+    if (syncBtn) syncBtn.disabled = true;
+    if (resetBtn) resetBtn.disabled = true;
+    if (backBtn) backBtn.disabled = true;
+
+    const GROUP_NAME = "Stash Battle Rankings";
+
+    try {
+      if (progressArea) {
+        progressArea.innerHTML = `
+          <div class="pwr-progress-wrapper" style="margin-top: 15px;">
+            <div class="pwr-progress-status-container">
+              <span class="pwr-progress-status" style="color: #0d6efd;">Finding or creating Stash group...</span>
+            </div>
+          </div>
+        `;
+      }
+
+      // 1. Find or create group
+      const groupsData = await graphqlQuery(FIND_GROUPS_QUERY, {
+        filter: { q: GROUP_NAME }
+      });
+      
+      let groupId = null;
+      const existingGroup = (groupsData.findGroups.groups || []).find(g => g.name === GROUP_NAME);
+      if (existingGroup) {
+        groupId = existingGroup.id;
+      } else {
+        const createData = await graphqlQuery(CREATE_GROUP_MUTATION, {
+          input: { name: GROUP_NAME }
+        });
+        groupId = createData.groupCreate.id;
+      }
+
+      if (progressArea) {
+        progressArea.innerHTML = `
+          <div class="pwr-progress-wrapper" style="margin-top: 15px;">
+            <div class="pwr-progress-status-container">
+              <span class="pwr-progress-status" style="color: #0d6efd;">Fetching library scenes...</span>
+            </div>
+          </div>
+        `;
+      }
+
+      // 2. Fetch all scenes in Stash with custom fields and current groups
+      const scenesData = await graphqlQuery(FIND_SCENES_FOR_GROUP_SYNC_QUERY, {
+        filter: { per_page: -1 }
+      });
+      const allScenes = scenesData.findScenes.scenes || [];
+
+      // 3. Process scenes:
+      const ratedScenes = allScenes.filter(s => getSceneRating(s) !== null);
+      
+      // Sort rated scenes descending by battle-rating
+      ratedScenes.sort((a, b) => {
+        const rA = getSceneRating(a);
+        const rB = getSceneRating(b);
+        return rB - rA;
+      });
+
+      const ratedSceneIds = new Set(ratedScenes.map(s => s.id));
+      const scenesToUpdate = [];
+
+      // Process rated scenes to set correct index
+      ratedScenes.forEach((scene, index) => {
+        const targetIndex = index + 1; // 1-based scene_index
+        
+        const otherGroups = [];
+        let currentRankGroup = null;
+        
+        (scene.groups || []).forEach(sg => {
+          if (sg.group && sg.group.id === groupId) {
+            currentRankGroup = sg;
+          } else if (sg.group) {
+            otherGroups.push({
+              group_id: sg.group.id,
+              scene_index: sg.scene_index
+            });
+          }
+        });
+
+        const needsUpdate = !currentRankGroup || currentRankGroup.scene_index !== targetIndex;
+
+        if (needsUpdate) {
+          const targetGroups = [
+            ...otherGroups,
+            { group_id: groupId, scene_index: targetIndex }
+          ];
+          scenesToUpdate.push({
+            id: scene.id,
+            groups: targetGroups
+          });
+        }
+      });
+
+      // Process unrated scenes to remove them from the group if they're in it
+      allScenes.forEach(scene => {
+        if (ratedSceneIds.has(scene.id)) return;
+        
+        const hasRankGroup = (scene.groups || []).some(sg => sg.group && sg.group.id === groupId);
+        if (hasRankGroup) {
+          const targetGroups = (scene.groups || [])
+            .filter(sg => sg.group && sg.group.id !== groupId)
+            .map(sg => ({
+              group_id: sg.group.id,
+              scene_index: sg.scene_index
+            }));
+
+          scenesToUpdate.push({
+            id: scene.id,
+            groups: targetGroups
+          });
+        }
+      });
+
+      const totalUpdates = scenesToUpdate.length;
+      if (totalUpdates === 0) {
+        if (progressArea) {
+          progressArea.innerHTML = `
+            <div class="pwr-progress-status-container" style="margin-top: 15px;">
+              <span class="pwr-progress-status" style="color: #4caf50; font-weight: 600;">✅ ELO group rankings are already in sync!</span>
+            </div>
+          `;
+        }
+        return;
+      }
+
+      // 4. Batch updates in chunks of 50
+      const chunkSize = 50;
+      let completedCount = 0;
+
+      for (let i = 0; i < totalUpdates; i += chunkSize) {
+        const chunk = scenesToUpdate.slice(i, i + chunkSize);
+        
+        let mutationParts = [];
+        let varDefs = [];
+        let variables = {};
+        
+        chunk.forEach((updateObj, index) => {
+          varDefs.push(`$input_${index}: SceneUpdateInput!`);
+          mutationParts.push(`update_${index}: sceneUpdate(input: $input_${index}) { id }`);
+          variables[`input_${index}`] = {
+            id: updateObj.id,
+            groups: updateObj.groups
+          };
+        });
+
+        const bulkMutation = `
+          mutation SyncRankingsBulk(${varDefs.join(', ')}) {
+            ${mutationParts.join('\n            ')}
+          }
+        `;
+
+        await graphqlQuery(bulkMutation, variables);
+
+        completedCount += chunk.length;
+        const percent = Math.round((completedCount / totalUpdates) * 100);
+
+        if (progressArea) {
+          progressArea.innerHTML = `
+            <div class="pwr-progress-wrapper" style="margin-top: 15px;">
+              <div class="pwr-progress-status-container">
+                <span class="pwr-progress-status" style="color: #0d6efd; font-weight: 600;">Syncing rankings...</span>
+                <span class="pwr-progress-count">${completedCount} / ${totalUpdates} (${percent}%)</span>
+              </div>
+              <div class="pwr-progress-track">
+                <div class="pwr-progress-bar" style="width: ${percent}%;"></div>
+              </div>
+            </div>
+          `;
+        }
+      }
+
+      if (progressArea) {
+        progressArea.innerHTML = `
+          <div class="pwr-progress-status-container" style="margin-top: 15px;">
+            <span class="pwr-progress-status" style="color: #4caf50; font-weight: 600;">✅ Sync complete! ${totalUpdates} scenes updated.</span>
+          </div>
+        `;
+      }
+
+    } catch (e) {
+      console.error("[Stash Battle] ❌ ELO rank sync failed:", e);
+      if (progressArea) {
+        progressArea.innerHTML = `
+          <div class="pwr-progress-status-container" style="margin-top: 15px;">
+            <span class="pwr-progress-status" style="color: #f44336; font-weight: 600;">❌ Sync failed: ${e.message}</span>
+          </div>
+        `;
+      }
+    } finally {
+      if (syncBtn) syncBtn.disabled = false;
       if (resetBtn) resetBtn.disabled = false;
       if (backBtn) backBtn.disabled = false;
     }
