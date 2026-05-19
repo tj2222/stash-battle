@@ -734,17 +734,7 @@
           <p class="pwr-config-subtitle">Manage your ELO head-to-head matching preferences and data.</p>
         </div>
         <div class="pwr-config-content">
-          <div class="pwr-config-card">
-            <h3 class="pwr-card-title">Sync ELO to Group</h3>
-            <p class="pwr-card-desc">
-              Sync all rated scenes into a Stash Group called <strong>Stash Battle Rankings</strong>. 
-              The scenes will be ordered with the highest-rated scene as Scene 1.
-            </p>
-            <button id="pwr-sync-rankings-btn" class="btn btn-secondary">
-              🔄 Sync Rankings to Group
-            </button>
-            <div id="pwr-sync-progress-area"></div>
-          </div>
+
           <div class="pwr-config-card">
             <h3 class="pwr-card-title">Reset All Ratings</h3>
             <p class="pwr-card-desc">
@@ -780,12 +770,7 @@
       });
     }
 
-    const syncBtn = comparisonArea.querySelector("#pwr-sync-rankings-btn");
-    if (syncBtn) {
-      syncBtn.addEventListener("click", () => {
-        executeRankingsSync();
-      });
-    }
+
   }
 
   function showResetConfirmationModal(n) {
@@ -934,27 +919,34 @@
   }
 
   async function executeRankingsSync() {
-    const syncBtn = document.getElementById("pwr-sync-rankings-btn");
-    const resetBtn = document.getElementById("pwr-reset-ratings-btn");
-    const backBtn = document.getElementById("pwr-config-back-btn");
-    const progressArea = document.getElementById("pwr-sync-progress-area");
+    const syncBtn = document.getElementById("pwr-sync-rankings-main-btn");
+    const mainSkipBtn = document.getElementById("pwr-skip-btn");
+    const mainRefreshBtn = document.getElementById("pwr-refresh-cache-btn");
+    const mainConfigBtn = document.getElementById("pwr-config-btn");
 
-    if (syncBtn) syncBtn.disabled = true;
-    if (resetBtn) resetBtn.disabled = true;
-    if (backBtn) backBtn.disabled = true;
+    disableChoice = true;
+    if (syncBtn) {
+      syncBtn.disabled = true;
+      syncBtn.textContent = "🔄 Connecting...";
+    }
+    if (mainSkipBtn) mainSkipBtn.disabled = true;
+    if (mainRefreshBtn) mainRefreshBtn.disabled = true;
+    if (mainConfigBtn) mainConfigBtn.disabled = true;
 
     const GROUP_NAME = "Stash Battle Rankings";
 
-    try {
-      if (progressArea) {
-        progressArea.innerHTML = `
-          <div class="pwr-progress-wrapper" style="margin-top: 15px;">
-            <div class="pwr-progress-status-container">
-              <span class="pwr-progress-status" style="color: #0d6efd;">Finding or creating Stash group...</span>
-            </div>
-          </div>
-        `;
+    function setStatus(msg, percent = null) {
+      if (syncBtn) {
+        if (percent !== null) {
+          syncBtn.textContent = `🔄 Syncing (${percent}%)`;
+        } else {
+          syncBtn.textContent = `🔄 ${msg}`;
+        }
       }
+    }
+
+    try {
+      setStatus("Finding/Creating group...");
 
       // 1. Find or create group
       const groupsData = await graphqlQuery(FIND_GROUPS_QUERY, {
@@ -972,15 +964,7 @@
         groupId = createData.groupCreate.id;
       }
 
-      if (progressArea) {
-        progressArea.innerHTML = `
-          <div class="pwr-progress-wrapper" style="margin-top: 15px;">
-            <div class="pwr-progress-status-container">
-              <span class="pwr-progress-status" style="color: #0d6efd;">Fetching library scenes...</span>
-            </div>
-          </div>
-        `;
-      }
+      setStatus("Fetching scenes...");
 
       // 2. Fetch rated scenes and scenes already in the group using a batched query
       const scenesData = await graphqlQuery(FIND_SCENES_FOR_GROUP_SYNC_QUERY, {
@@ -1075,12 +1059,11 @@
 
       const totalUpdates = scenesToUpdate.length;
       if (totalUpdates === 0) {
-        if (progressArea) {
-          progressArea.innerHTML = `
-            <div class="pwr-progress-status-container" style="margin-top: 15px;">
-              <span class="pwr-progress-status" style="color: #4caf50; font-weight: 600;">✅ ELO group rankings are already in sync!</span>
-            </div>
-          `;
+        if (syncBtn) {
+          syncBtn.textContent = "✅ Already Synced!";
+          setTimeout(() => {
+            syncBtn.textContent = "🔄 Sync Rankings";
+          }, 2000);
         }
         return;
       }
@@ -1116,42 +1099,30 @@
         completedCount += chunk.length;
         const percent = Math.round((completedCount / totalUpdates) * 100);
 
-        if (progressArea) {
-          progressArea.innerHTML = `
-            <div class="pwr-progress-wrapper" style="margin-top: 15px;">
-              <div class="pwr-progress-status-container">
-                <span class="pwr-progress-status" style="color: #0d6efd; font-weight: 600;">Syncing rankings...</span>
-                <span class="pwr-progress-count">${completedCount} / ${totalUpdates} (${percent}%)</span>
-              </div>
-              <div class="pwr-progress-track">
-                <div class="pwr-progress-bar" style="width: ${percent}%;"></div>
-              </div>
-            </div>
-          `;
-        }
+        setStatus("Syncing...", percent);
       }
 
-      if (progressArea) {
-        progressArea.innerHTML = `
-          <div class="pwr-progress-status-container" style="margin-top: 15px;">
-            <span class="pwr-progress-status" style="color: #4caf50; font-weight: 600;">✅ Sync complete! ${totalUpdates} scenes updated.</span>
-          </div>
-        `;
+      if (syncBtn) {
+        syncBtn.textContent = `✅ Sync Complete! (${totalUpdates})`;
+        setTimeout(() => {
+          syncBtn.textContent = "🔄 Sync Rankings";
+        }, 2000);
       }
 
     } catch (e) {
       console.error("[Stash Battle] ❌ ELO rank sync failed:", e);
-      if (progressArea) {
-        progressArea.innerHTML = `
-          <div class="pwr-progress-status-container" style="margin-top: 15px;">
-            <span class="pwr-progress-status" style="color: #f44336; font-weight: 600;">❌ Sync failed: ${e.message}</span>
-          </div>
-        `;
+      if (syncBtn) {
+        syncBtn.textContent = `❌ Sync Failed`;
+        setTimeout(() => {
+          syncBtn.textContent = "🔄 Sync Rankings";
+        }, 3000);
       }
     } finally {
+      disableChoice = false;
       if (syncBtn) syncBtn.disabled = false;
-      if (resetBtn) resetBtn.disabled = false;
-      if (backBtn) backBtn.disabled = false;
+      if (mainSkipBtn) mainSkipBtn.disabled = false;
+      if (mainRefreshBtn) mainRefreshBtn.disabled = false;
+      if (mainConfigBtn) mainConfigBtn.disabled = false;
     }
   }
 
@@ -2356,6 +2327,7 @@
             <div class="pwr-action-buttons">
               <button id="pwr-skip-btn" class="btn btn-secondary">Skip (Get New Pair)</button>
               <button id="pwr-refresh-cache-btn" class="btn btn-secondary" title="Refresh scene list from server (use if you've added new scenes)">🔄 Refresh Cache</button>
+              <button id="pwr-sync-rankings-main-btn" class="btn btn-secondary" title="Sync ELO rankings to Stash Group">🔄 Sync Rankings</button>
               <button id="pwr-config-btn" class="btn btn-secondary" title="Stash Battle Configurations">⚙️ Config</button>
             </div>
             <div class="pwr-keyboard-hint">
@@ -3186,6 +3158,15 @@
       configBtn.addEventListener("click", () => {
         if (disableChoice) return;
         renderConfigPanel();
+      });
+    }
+
+    // Main view Sync Rankings button
+    const mainSyncBtn = modal.querySelector("#pwr-sync-rankings-main-btn");
+    if (mainSyncBtn) {
+      mainSyncBtn.addEventListener("click", () => {
+        if (disableChoice) return;
+        executeRankingsSync();
       });
     }
 
