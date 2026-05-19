@@ -589,6 +589,9 @@
     date
     custom_fields
     play_count
+    play_duration
+    o_counter
+    rating100
     paths {
       screenshot
       preview
@@ -1329,6 +1332,8 @@
       }
     }
 
+    totalScenesCount = opponentPool.length;
+
     // index of scene1 within the chosen pool
     const scene1IdxInPool = opponentPool.findIndex(s => s.id === scene1.id);
     // If scene1 not in opponent pool (unrated), position where DEFAULT_RATING (1200) would sit
@@ -1942,22 +1947,28 @@
     const previewPath = scene.paths ? scene.paths.preview : null;
     const rating = getSceneRating(scene);
     const count = getSceneBattleCount(scene);
-    let stashRating;
+    let renderedBattleRating;
     if (rating === null || count === 0) {
-      stashRating = "Unrated";
+      renderedBattleRating = "Unrated";
     } else if (count < 8) {
-      stashRating = `${rating}?`;
+      renderedBattleRating = `${rating}?`;
     } else {
-      stashRating = `${rating}`;
+      renderedBattleRating = `${rating}`;
     }
+    
+    // Star rating formatted from rating100
+    const rating100 = scene.rating100;
+    const starRating = rating100 !== null && rating100 !== undefined
+      ? `${(rating100 / 20).toFixed(1)} ⭐`
+      : "Unrated";
     
     // Handle numeric ranks and string ranks
     let rankDisplay = '';
     if (rank !== null && rank !== undefined) {
       if (typeof rank === 'number') {
-        rankDisplay = `<span class="pwr-scene-rank">#${rank}</span>`;
+        rankDisplay = `<span class="pwr-scene-rank">#${rank} / ${totalScenesCount}</span>`;
       } else {
-        rankDisplay = `<span class="pwr-scene-rank">${rank}</span>`;
+        rankDisplay = `<span class="pwr-scene-rank">${rank} / ${totalScenesCount}</span>`;
       }
     }
     
@@ -1995,10 +2006,13 @@
             
             <div class="pwr-scene-meta">
               <div class="pwr-meta-item"><strong>Studio:</strong> ${studio}</div>
+              <div class="pwr-meta-item"><strong>Battle Rating:</strong> ${renderedBattleRating}</div>
               <div class="pwr-meta-item"><strong>Performers:</strong> ${performers}</div>
+              <div class="pwr-meta-item"><strong>Star Rating:</strong> ${starRating}</div>
               <div class="pwr-meta-item"><strong>Play Count:</strong> ${scene.play_count || 0}</div>
+              <div class="pwr-meta-item"><strong>Total View Duration:</strong> ${formatDuration(scene.play_duration)}</div>
               <div class="pwr-meta-item"><strong>Battle Count:</strong> ${getSceneBattleCount(scene)}</div>
-              <div class="pwr-meta-item"><strong>Rating:</strong> ${stashRating}</div>
+              <div class="pwr-meta-item"><strong>O Count:</strong> ${scene.o_counter || 0}</div>
               <div class="pwr-meta-item pwr-tags-row"><strong>Tags:</strong> ${tags.length > 0 ? tags.map((tag) => `<span class="pwr-tag">${tag}</span>`).join("") : '<span class="pwr-none">None</span>'}</div>
             </div>
           </div>

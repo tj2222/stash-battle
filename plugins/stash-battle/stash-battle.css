@@ -366,9 +366,9 @@
 }
 
 .pwr-scene-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
   font-size: 0.9rem;
   color: #aaa;
   margin-bottom: 10px;
@@ -380,6 +380,7 @@
 
 /* Scene Tags */
 .pwr-tags-row {
+  grid-column: span 2;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -402,6 +403,16 @@
 .pwr-none {
   color: #666;
   font-style: italic;
+}
+
+@media (max-width: 768px) {
+  .pwr-scene-meta {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .pwr-tags-row {
+    grid-column: span 1;
+  }
 }
 
 /* Choose Button */
