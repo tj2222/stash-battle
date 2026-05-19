@@ -1260,14 +1260,14 @@
     "Square": "SQUARE",
   };
 
-  // Build SceneFilterType from URL 'c' params
+  // Build SceneFilterType from URL 'c' params (or 'qfc' if loading from a scene page)
   // Transforms URL criterion format to GraphQL SceneFilterType format
   function getSceneFilter(searchParams) {
     const sceneFilter = {};
     
-    if (!searchParams.has("c")) return null;
+    if (!searchParams.has("c") && !searchParams.has("qfc")) return null;
     
-    for (const cStr of searchParams.getAll("c")) {
+    for (const cStr of searchParams.getAll("c").concat(searchParams.getAll("qfc"))) {
       try {
         // Decode URL format: () → {} (safely preserving strings)
         const decoded = translateJSON(cStr, true);
