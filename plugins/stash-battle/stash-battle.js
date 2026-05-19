@@ -1447,7 +1447,7 @@
   // Each category requires different transformation logic
   const CRITERION_CATEGORIES = {
     // Boolean: no modifier, value is "true"/"false" string → convert to boolean
-    boolean: new Set(["organized", "interactive", "performer_favorite"]),
+    boolean: new Set(["organized", "interactive", "performer_favorite", "filter_favorites"]),
     // StringEnum: URL has modifier but GraphQL just expects the string value directly
     stringEnum: new Set(["is_missing", "has_markers"]),
     // Multi: value is array of {id, label} → extract IDs only
@@ -1504,7 +1504,7 @@
         // Remove type from the object - it becomes the key
         const { type, ...rest } = cObj;
         
-        // Category: Boolean (organized, interactive, performer_favorite)
+        // Category: Boolean (organized, interactive, performer_favorite, filter_favorites)
         // URL: { type, value: "true" } → GraphQL: true
         if (CRITERION_CATEGORIES.boolean.has(filterType)) {
           sceneFilter[filterType] = rest.value === "true" || rest.value === true;

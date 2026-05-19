@@ -261,7 +261,7 @@
   opacity: 1;
 }
 
-.pwr-scene-card:hover .pwr-scene-image:not(.pwr-no-image) {
+.pwr-scene-card:hover .pwr-scene-image:not(.pwr-no-image):not(.pwr-performer-image) {
   opacity: 0;
 }
 
