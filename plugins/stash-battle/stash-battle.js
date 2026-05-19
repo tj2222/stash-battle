@@ -650,8 +650,20 @@
   `;
 
   const FIND_SCENES_FOR_GROUP_SYNC_QUERY = `
-    query SyncFindScenes($filter: FindFilterType) {
-      findScenes(filter: $filter) {
+    query SyncFindScenes($filter: FindFilterType, $rated_filter: SceneFilterType, $group_filter: SceneFilterType) {
+      rated: findScenes(filter: $filter, scene_filter: $rated_filter) {
+        scenes {
+          id
+          custom_fields
+          groups {
+            group {
+              id
+            }
+            scene_index
+          }
+        }
+      }
+      grouped: findScenes(filter: $filter, scene_filter: $group_filter) {
         scenes {
           id
           custom_fields
@@ -970,11 +982,31 @@
         `;
       }
 
-      // 2. Fetch all scenes in Stash with custom fields and current groups
+      // 2. Fetch rated scenes and scenes already in the group using a batched query
       const scenesData = await graphqlQuery(FIND_SCENES_FOR_GROUP_SYNC_QUERY, {
-        filter: { per_page: -1 }
+        filter: { per_page: -1 },
+        rated_filter: {
+          custom_fields: [
+            {
+              field: "battle-rating",
+              modifier: "NOT_NULL",
+              value: []
+            }
+          ]
+        },
+        group_filter: {
+          groups: {
+            value: [groupId],
+            modifier: "INCLUDES"
+          }
+        }
       });
-      const allScenes = scenesData.findScenes.scenes || [];
+
+      // Merge both sets of scenes by ID to handle rated and/or grouped scenes
+      const allScenesMap = new Map();
+      (scenesData.rated.scenes || []).forEach(s => allScenesMap.set(s.id, s));
+      (scenesData.grouped.scenes || []).forEach(s => allScenesMap.set(s.id, s));
+      const allScenes = Array.from(allScenesMap.values());
 
       // 3. Process scenes:
       const ratedScenes = allScenes.filter(s => getSceneRating(s) !== null);
