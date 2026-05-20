@@ -1518,6 +1518,13 @@
           continue;
         }
         
+        // Category: Custom Fields
+        // URL: { type: "custom_fields", value: [{field, modifier, value}] } → GraphQL: [{field, modifier, value}]
+        if (filterType === "custom_fields") {
+          sceneFilter[filterType] = rest.value || [];
+          continue;
+        }
+
         // Category: Multi (performers, groups, movies, galleries)
         // URL uses same {items, excluded} structure as hierarchical, but GraphQL doesn't use depth
         // URL: { type, modifier, value: { items: [{id, label}], excluded: [{id, label}] } }
