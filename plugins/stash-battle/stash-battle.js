@@ -3115,6 +3115,36 @@
     );
   }
 
+  let isWaitingForDismissal = false;
+
+  function setupDismissListener() {
+    if (isWaitingForDismissal) return;
+    isWaitingForDismissal = true;
+    
+    const handleDismiss = (event) => {
+      // Prevent standard browser behaviors for keypresses (like space scrolling)
+      if (event.type === "keydown") {
+        event.preventDefault();
+      }
+      cleanupDismiss();
+    };
+    
+    function cleanupDismiss() {
+      document.removeEventListener("keydown", handleDismiss);
+      document.removeEventListener("click", handleDismiss);
+      
+      document.querySelectorAll(".pwr-rating-overlay").forEach(el => el.remove());
+      isWaitingForDismissal = false;
+      loadNewPair();
+    }
+    
+    // Brief delay to allow initial choose-click event bubbling to finish fully
+    setTimeout(() => {
+      document.addEventListener("keydown", handleDismiss);
+      document.addEventListener("click", handleDismiss);
+    }, 100);
+  }
+
   function handleChooseScene(event) {
     if(disableChoice) return;
     disableChoice = true;
@@ -3246,10 +3276,8 @@
         );
       }
       
-      // Load new pair after animation
-      setTimeout(() => {
-        loadNewPair();
-      }, 1500);
+      // Wait for user keypress or click to load next pair
+      setupDismissListener();
       return;
     }
 
@@ -3302,10 +3330,8 @@
         );
       }
       
-      // Load new pair after animation
-      setTimeout(() => {
-        loadNewPair();
-      }, 1500);
+      // Wait for user keypress or click to load next pair
+      setupDismissListener();
       return;
     }
 
@@ -3342,10 +3368,8 @@
       );
     }
 
-    // Load new pair after animation
-    setTimeout(() => {
-      loadNewPair();
-    }, 1500);
+    // Wait for user keypress or click to load next pair
+    setupDismissListener();
   }
 
   function showRatingAnimation(card, oldRating, newRating, change, isWinner, oldRankInfo = null, newRankInfo = null) {
@@ -3417,11 +3441,6 @@
         ratingDisplay.textContent = newRating;
       }
     }, intervalTime);
-
-    // Remove overlay after animation
-    setTimeout(() => {
-      overlay.remove();
-    }, 1400);
   }
 
   // ============================================
