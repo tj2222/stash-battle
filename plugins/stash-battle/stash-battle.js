@@ -2225,30 +2225,56 @@
   }
   
   function createVictoryScreen(champion) {
-    const file = champion.files && champion.files[0] ? champion.files[0] : {};
-    let title = champion.title;
-    if (!title && file.path) {
-      const pathParts = file.path.split(/[/\\]/);
-      title = pathParts[pathParts.length - 1].replace(/\.[^/.]+$/, "");
-    }
-    if (!title) {
-      title = `Scene #${champion.id}`;
-    }
+    const isPerformer = battleTarget === "performers";
+    const itemNoun = isPerformer ? "performers" : "scenes";
     
-    const screenshotPath = champion.paths ? champion.paths.screenshot : null;
+    let title = "";
+    let imageHtml = "";
+    
+    if (isPerformer) {
+      title = champion.name || "";
+      if (champion.disambiguation) {
+        title += ` (${champion.disambiguation})`;
+      }
+      if (!title) {
+        title = `Performer #${champion.id}`;
+      }
+      
+      const imagePath = champion.image_path || null;
+      if (imagePath) {
+        imageHtml = `<img class="pwr-victory-image pwr-performer-image" src="${imagePath}" alt="${title}" />`;
+      } else if (champion.images && champion.images.length > 0) {
+        const firstImg = champion.images[0].paths.image || champion.images[0].paths.thumbnail;
+        imageHtml = `<img class="pwr-victory-image pwr-performer-image" src="${firstImg}" alt="${title}" />`;
+      } else {
+        imageHtml = `<div class="pwr-victory-image pwr-performer-image pwr-no-image">No Image</div>`;
+      }
+    } else {
+      const file = champion.files && champion.files[0] ? champion.files[0] : {};
+      title = champion.title;
+      if (!title && file.path) {
+        const pathParts = file.path.split(/[/\\]/);
+        title = pathParts[pathParts.length - 1].replace(/\.[^/.]+$/, "");
+      }
+      if (!title) {
+        title = `Scene #${champion.id}`;
+      }
+      
+      const screenshotPath = champion.paths ? champion.paths.screenshot : null;
+      imageHtml = screenshotPath 
+        ? `<img class="pwr-victory-image" src="${screenshotPath}" alt="${title}" />`
+        : `<div class="pwr-victory-image pwr-no-image">No Screenshot</div>`;
+    }
     
     return `
       <div class="pwr-victory-screen">
         <div class="pwr-victory-crown">👑</div>
         <h2 class="pwr-victory-title">CHAMPION!</h2>
         <div class="pwr-victory-scene">
-          ${screenshotPath 
-            ? `<img class="pwr-victory-image" src="${screenshotPath}" alt="${title}" />`
-            : `<div class="pwr-victory-image pwr-no-image">No Screenshot</div>`
-          }
+          ${imageHtml}
         </div>
         <h3 class="pwr-victory-name">${title}</h3>
-        <p class="pwr-victory-stats">Conquered all ${totalScenesCount} scenes with a ${gauntletWins} win streak!</p>
+        <p class="pwr-victory-stats">Conquered all ${totalScenesCount} ${itemNoun} with a ${gauntletWins} win streak!</p>
         <button id="pwr-new-gauntlet" class="btn btn-primary">Start New Gauntlet</button>
       </div>
     `;
@@ -2258,27 +2284,52 @@
     const comparisonArea = document.getElementById("pwr-comparison-area");
     if (!comparisonArea) return;
     
-    const file = scene.files && scene.files[0] ? scene.files[0] : {};
-    let title = scene.title;
-    if (!title && file.path) {
-      const pathParts = file.path.split(/[/\\]/);
-      title = pathParts[pathParts.length - 1].replace(/\.[^/.]+$/, "");
-    }
-    if (!title) {
-      title = `Scene #${scene.id}`;
-    }
+    const isPerformer = battleTarget === "performers";
     
-    const screenshotPath = scene.paths ? scene.paths.screenshot : null;
+    let title = "";
+    let imageHtml = "";
+    
+    if (isPerformer) {
+      title = scene.name || "";
+      if (scene.disambiguation) {
+        title += ` (${scene.disambiguation})`;
+      }
+      if (!title) {
+        title = `Performer #${scene.id}`;
+      }
+      
+      const imagePath = scene.image_path || null;
+      if (imagePath) {
+        imageHtml = `<img class="pwr-victory-image pwr-performer-image" src="${imagePath}" alt="${title}" />`;
+      } else if (scene.images && scene.images.length > 0) {
+        const firstImg = scene.images[0].paths.image || scene.images[0].paths.thumbnail;
+        imageHtml = `<img class="pwr-victory-image pwr-performer-image" src="${firstImg}" alt="${title}" />`;
+      } else {
+        imageHtml = `<div class="pwr-victory-image pwr-performer-image pwr-no-image">No Image</div>`;
+      }
+    } else {
+      const file = scene.files && scene.files[0] ? scene.files[0] : {};
+      title = scene.title;
+      if (!title && file.path) {
+        const pathParts = file.path.split(/[/\\]/);
+        title = pathParts[pathParts.length - 1].replace(/\.[^/.]+$/, "");
+      }
+      if (!title) {
+        title = `Scene #${scene.id}`;
+      }
+      
+      const screenshotPath = scene.paths ? scene.paths.screenshot : null;
+      imageHtml = screenshotPath 
+        ? `<img class="pwr-victory-image" src="${screenshotPath}" alt="${title}" />`
+        : `<div class="pwr-victory-image pwr-no-image">No Screenshot</div>`;
+    }
     
     comparisonArea.innerHTML = `
       <div class="pwr-victory-screen">
         <div class="pwr-victory-crown">📍</div>
         <h2 class="pwr-victory-title">PLACED!</h2>
         <div class="pwr-victory-scene">
-          ${screenshotPath 
-            ? `<img class="pwr-victory-image" src="${screenshotPath}" alt="${title}" />`
-            : `<div class="pwr-victory-image pwr-no-image">No Screenshot</div>`
-          }
+          ${imageHtml}
         </div>
         <h3 class="pwr-victory-name">${title}</h3>
         <p class="pwr-victory-stats">
