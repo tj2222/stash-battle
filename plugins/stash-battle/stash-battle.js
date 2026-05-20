@@ -3377,37 +3377,45 @@
     const overlay = document.createElement("div");
     overlay.className = `pwr-rating-overlay ${isWinner ? 'pwr-rating-winner' : 'pwr-rating-loser'}`;
     
-    // Add Rank Transition text with simple, lightweight styling at the top
+    let rankDisplay = null;
+    let rankChangeDisplay = null;
+    let startRank = null;
+    let newRank = null;
+
+    // Setup Rank elements at the top if rank info is available
     if (oldRankInfo && newRankInfo && newRankInfo.rank !== null) {
-      const rankDisplay = document.createElement("div");
-      rankDisplay.style.fontSize = "3rem";
-      rankDisplay.style.fontWeight = "bold";
-      rankDisplay.style.marginBottom = "12px";
-      rankDisplay.style.color = "rgba(255, 255, 255, 0.95)";
-      rankDisplay.style.textShadow = "0 2px 10px rgba(0, 0, 0, 0.3)";
+      rankDisplay = document.createElement("div");
+      rankDisplay.className = "pwr-rating-display";
+      rankDisplay.style.textAlign = "center";
+      rankDisplay.textContent = oldRankInfo.rank === null ? "Unrated" : `#${oldRankInfo.rank} / ${oldRankInfo.total}`;
+
+      rankChangeDisplay = document.createElement("div");
+      rankChangeDisplay.className = "pwr-rating-change";
+      rankChangeDisplay.style.marginBottom = "24px";
+      rankChangeDisplay.style.textAlign = "center";
       
-      const newRank = newRankInfo.rank;
-      const total = newRankInfo.total;
-      let oldRankStr = "";
-      let suffix = "";
+      newRank = newRankInfo.rank;
+      startRank = oldRankInfo.rank === null ? newRankInfo.total : oldRankInfo.rank;
       
       if (oldRankInfo.rank === null) {
-        oldRankStr = "Unrated";
-        suffix = " (New)";
+        rankChangeDisplay.textContent = "▲ New";
+        rankChangeDisplay.style.color = "#d4ffff";
       } else {
-        oldRankStr = String(oldRankInfo.rank);
-        const diff = oldRankInfo.rank - newRank; // old - new: positive means rank decreased (moved UP)
+        const diff = oldRankInfo.rank - newRank; // positive means rank decreased (moved UP)
         if (diff > 0) {
-          suffix = ` (▲ ${diff})`;
+          rankChangeDisplay.textContent = `▲ ${diff}`;
+          rankChangeDisplay.style.color = "#d4ffd4";
         } else if (diff < 0) {
-          suffix = ` (▼ ${Math.abs(diff)})`;
+          rankChangeDisplay.textContent = `▼ ${Math.abs(diff)}`;
+          rankChangeDisplay.style.color = "#ffd4d4";
         } else {
-          suffix = " (—)";
+          rankChangeDisplay.textContent = "—";
+          rankChangeDisplay.style.color = "rgba(255, 255, 255, 0.8)";
         }
       }
       
-      rankDisplay.textContent = `${oldRankStr} → ${newRank} / ${total}${suffix}`;
       overlay.appendChild(rankDisplay);
+      overlay.appendChild(rankChangeDisplay);
     }
 
     const ratingDisplay = document.createElement("div");
@@ -3441,6 +3449,32 @@
         ratingDisplay.textContent = newRating;
       }
     }, intervalTime);
+
+    // Animate the rank counting in sync
+    if (rankDisplay && startRank !== null && newRank !== null) {
+      let currentRankDisplay = startRank;
+      const rankChangeAmount = newRank - startRank;
+      const rankIncrement = rankChangeAmount / totalTicks;
+      
+      const startTotal = oldRankInfo.total;
+      const newTotal = newRankInfo.total;
+      let currentTotalDisplay = startTotal;
+      const totalChangeAmount = newTotal - startTotal;
+      const totalIncrement = totalChangeAmount / totalTicks;
+      let rankTickCount = 0;
+      
+      const rankInterval = setInterval(() => {
+        rankTickCount++;
+        currentRankDisplay += rankIncrement;
+        currentTotalDisplay += totalIncrement;
+        rankDisplay.textContent = `#${Math.round(currentRankDisplay)} / ${Math.round(currentTotalDisplay)}`;
+        
+        if (rankTickCount >= totalTicks) {
+          clearInterval(rankInterval);
+          rankDisplay.textContent = `#${newRank} / ${newTotal}`;
+        }
+      }, intervalTime);
+    }
   }
 
   // ============================================
