@@ -829,6 +829,22 @@
     }
   `;
 
+  const FIND_IMAGES_QUERY = `
+    query FindImages($filter: FindFilterType, $image_filter: ImageFilterType) {
+      findImages(filter: $filter, image_filter: $image_filter) {
+        count
+        images {
+          id
+          paths {
+            thumbnail
+            image
+          }
+        }
+      }
+    }
+  `;
+
+
   // Fetch either scenes or performers from network depending on battleTarget
   async function fetchItems(filter, itemFilter = null) {
     if (battleTarget === "scenes") {
@@ -886,9 +902,27 @@
     
     try {
       const query = battleTarget === "scenes" ? FIND_SCENE_DETAILS_QUERY : FIND_PERFORMER_DETAILS_QUERY;
-      const data = await graphqlQuery(query, { id: itemId });
+      const promises = [graphqlQuery(query, { id: itemId })];
+      if (battleTarget === "performers") {
+        promises.push(
+          graphqlQuery(FIND_IMAGES_QUERY, {
+            filter: { page: 1, per_page: 80, sort: "path", direction: "ASC" },
+            image_filter: {
+              performers: { value: [itemId.toString()], excludes: [], modifier: "INCLUDES_ALL" }
+            }
+          }).catch((e) => {
+            console.error(`[Stash Battle] Error fetching images for performer ${itemId}:`, e);
+            return null;
+          })
+        );
+      }
+      
+      const [data, imagesData] = await Promise.all(promises);
       const details = battleTarget === "scenes" ? data.findScene : data.findPerformer;
       if (details) {
+        if (battleTarget === "performers") {
+          details.images = (imagesData && imagesData.findImages) ? (imagesData.findImages.images || []) : [];
+        }
         getDetailsCache().set(itemId, details);
       }
       return details;
@@ -2581,15 +2615,42 @@
     const currentParams = window.location.search;
     const performerUrl = `/performers/${performer.id}${currentParams}`;
 
+    let imageHtml = "";
+    if (imagePath) {
+      imageHtml = `<img class="pwr-scene-image pwr-performer-image" src="${imagePath}" alt="${title}" loading="lazy" data-default-src="${imagePath}" />`;
+    } else if (performer.images && performer.images.length > 0) {
+      const firstImg = performer.images[0].paths.image || performer.images[0].paths.thumbnail;
+      imageHtml = `<img class="pwr-scene-image pwr-performer-image" src="${firstImg}" alt="${title}" loading="lazy" data-default-src="${firstImg}" />`;
+    } else {
+      imageHtml = `<div class="pwr-scene-image pwr-performer-image pwr-no-image" data-default-src="">No Image</div>`;
+    }
+
+    let galleryHtml = "";
+    if (performer.images && performer.images.length > 0) {
+      galleryHtml = `
+        <div class="pwr-gallery-thumbs-container">
+          <div class="pwr-gallery-thumbs">
+            ${performer.images.map((img) => {
+              const hoverSrc = img.paths.image || img.paths.thumbnail;
+              const thumbSrc = img.paths.thumbnail || img.paths.image;
+              return `
+                <div class="pwr-gallery-thumb" data-src="${hoverSrc}">
+                  <img src="${thumbSrc}" alt="Thumb" loading="lazy" />
+                </div>
+              `;
+            }).join("")}
+          </div>
+        </div>
+      `;
+    }
+
     return `
       <div class="pwr-scene-card pwr-performer-card" data-side="${side}">
         <div class="pwr-scene-image-container" data-scene-url="${performerUrl}">
-          ${imagePath 
-            ? `<img class="pwr-scene-image pwr-performer-image" src="${imagePath}" alt="${title}" loading="lazy" />`
-            : `<div class="pwr-scene-image pwr-no-image">No Image</div>`
-          }
+          ${imageHtml}
           ${streakDisplay}
           <div class="pwr-click-hint">Click to open performer</div>
+          ${galleryHtml}
         </div>
         
         <div class="pwr-scene-body" data-winner="${performer.id}">
@@ -2626,7 +2687,7 @@
     const syncButtonHtml = isPerformer ? "" : `<button id="pwr-sync-rankings-main-btn" class="btn btn-secondary" title="Sync ELO rankings to Stash Group">🔄 Sync Rankings</button>`;
 
     return `
-      <div id="stash-battle-container" class="pwr-container">
+      <div id="stash-battle-container" class="pwr-container ${isPerformer ? 'pwr-performers-mode' : ''}">
         <div class="pwr-header">
           <h1 class="pwr-title">⚔️ Stash Battle</h1>
           <p class="pwr-subtitle">Compare ${itemNoun} head-to-head to build your rankings</p>
@@ -2757,6 +2818,44 @@
         video.currentTime = 0;
       });
     });
+
+    // Attach gallery thumbnail hover event listeners for performer cards
+    if (battleTarget === "performers") {
+      comparisonArea.querySelectorAll(".pwr-performer-card").forEach((card) => {
+        const mainImage = card.querySelector(".pwr-performer-image");
+        if (!mainImage) return;
+
+        const defaultSrc = mainImage.dataset.defaultSrc;
+        const thumbsContainer = card.querySelector(".pwr-gallery-thumbs-container");
+
+        if (thumbsContainer) {
+          // Stop propagation of click events inside thumbs container so clicking thumbnails doesn't trigger card navigation
+          thumbsContainer.addEventListener("click", (e) => {
+            e.stopPropagation();
+          });
+
+          thumbsContainer.addEventListener("mouseleave", () => {
+            if (defaultSrc) {
+              mainImage.src = defaultSrc;
+            }
+            card.querySelectorAll(".pwr-gallery-thumb").forEach((t) => t.classList.remove("active"));
+          });
+        }
+
+        card.querySelectorAll(".pwr-gallery-thumb").forEach((thumb) => {
+          const hoverSrc = thumb.dataset.src;
+
+          thumb.addEventListener("mouseenter", () => {
+            if (hoverSrc) {
+              mainImage.src = hoverSrc;
+            }
+            card.querySelectorAll(".pwr-gallery-thumb").forEach((t) => t.classList.remove("active"));
+            thumb.classList.add("active");
+          });
+        });
+      });
+    }
+
     
     // Update skip button state
     const skipBtn = document.querySelector("#pwr-skip-btn");
@@ -3352,9 +3451,10 @@
 
     const modal = document.createElement("div");
     modal.id = "pwr-modal";
+    const isPerformer = battleTarget === "performers";
     modal.innerHTML = `
       <div class="pwr-modal-backdrop"></div>
-      <div class="pwr-modal-content">
+      <div class="pwr-modal-content ${isPerformer ? 'pwr-performers-modal' : ''}">
         <button class="pwr-modal-close">✕</button>
         ${createMainUI()}
       </div>

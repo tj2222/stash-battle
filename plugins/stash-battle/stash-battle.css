@@ -1031,4 +1031,217 @@
   100% { transform: scale(1); opacity: 0.8; }
 }
 
+/* Performer Card Side-by-Side Symmetrical Layout */
+.pwr-performer-card {
+  display: flex;
+  height: 80vh;
+  min-height: 650px;
+  max-height: 850px;
+}
+
+.pwr-performer-card[data-side="left"] {
+  flex-direction: row;
+}
+
+.pwr-performer-card[data-side="right"] {
+  flex-direction: row-reverse;
+}
+
+.pwr-performer-card .pwr-scene-image-container {
+  flex: 0 0 70%;
+  height: 100%;
+  aspect-ratio: auto; /* Override standard 16:9 aspect ratio */
+  display: flex;
+  position: relative;
+  overflow: hidden;
+  background: #000; /* Rich solid black background for borders/bars */
+}
+
+.pwr-performer-card[data-side="left"] .pwr-scene-image-container {
+  flex-direction: row;
+}
+
+.pwr-performer-card[data-side="right"] .pwr-scene-image-container {
+  flex-direction: row-reverse;
+}
+
+.pwr-performer-card .pwr-scene-image {
+  flex: 1;
+  height: 100%;
+  width: 100%;
+  min-width: 0;
+  object-fit: contain; /* Resize instead of crop */
+}
+
+/* Explicitly scale down the image portion when thumbs strip is active to guarantee space */
+.pwr-performer-card .pwr-scene-image-container:has(.pwr-gallery-thumbs-container) .pwr-scene-image {
+  width: calc(100% - 50px);
+  max-width: calc(100% - 50px);
+}
+
+
+.pwr-performer-card .pwr-scene-body {
+  flex: 0 0 30%;
+  min-width: 0; /* Enable shrinking and text truncation */
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.pwr-performer-card .pwr-scene-info {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 30px 24px;
+  box-sizing: border-box;
+  min-width: 0; /* Prevent children from overflowing */
+}
+
+.pwr-performer-card .pwr-scene-meta {
+  grid-template-columns: 1fr; /* Single column layout for vertical readability */
+  gap: 14px; /* Increased gap for larger elements */
+  font-size: 1.15rem; /* Significantly larger text for text fields */
+  color: #ddd; /* Brighter, premium high-contrast text color */
+  margin-top: 15px;
+  margin-bottom: 20px;
+}
+
+.pwr-performer-card .pwr-meta-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.pwr-performer-card .pwr-meta-item strong {
+  color: #aaa; /* Premium label color */
+  font-weight: 600;
+  flex: 0 0 130px; /* Force labels to align perfectly in a single column */
+  display: inline-block;
+}
+
+.pwr-performer-card .pwr-tags-row {
+  grid-column: span 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.pwr-performer-card .pwr-tags-row strong {
+  margin-right: 0;
+}
+
+.pwr-performer-card .pwr-tag {
+  font-size: 0.85rem;
+  padding: 4px 10px;
+}
+
+.pwr-performer-card .pwr-scene-rank {
+  font-size: 1.3rem;
+}
+
+.pwr-performer-card .pwr-choose-btn {
+  padding: 24px;
+  font-size: 1.4rem;
+}
+
+/* Adjustments for absolute overlays on Left Card due to outer left thumbs strip */
+.pwr-performer-card[data-side="left"] .pwr-streak-badge {
+  left: 60px;
+}
+
+.pwr-performer-card[data-side="left"] .pwr-click-hint {
+  left: 60px;
+}
+
+/* Vertical Performer Image Gallery Strip */
+.pwr-performer-card .pwr-gallery-thumbs-container {
+  position: static;
+  width: 50px;
+  flex: 0 0 50px; /* Force exactly 50px width and prevent shrinking */
+  height: 100%;
+  background: rgba(0, 0, 0, 0.4);
+  padding: 6px 4px;
+  box-sizing: border-box;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+}
+
+.pwr-performer-card[data-side="left"] .pwr-gallery-thumbs-container {
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.pwr-performer-card[data-side="right"] .pwr-gallery-thumbs-container {
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.pwr-performer-card .pwr-gallery-thumbs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  height: 100%;
+}
+
+.pwr-performer-card .pwr-gallery-thumbs::-webkit-scrollbar {
+  width: 3px;
+}
+
+.pwr-performer-card .pwr-gallery-thumbs::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 1.5px;
+}
+
+.pwr-performer-card .pwr-gallery-thumb {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  border-radius: 2px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.pwr-performer-card .pwr-gallery-thumb:hover,
+.pwr-performer-card .pwr-gallery-thumb.active {
+  border-color: #0d6efd;
+}
+
+.pwr-performer-card .pwr-gallery-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Scoped Modal and Container scaling for Performer Mode */
+.pwr-container.pwr-performers-mode {
+  max-width: 1800px;
+}
+
+.pwr-modal-content.pwr-performers-modal {
+  max-width: 1800px;
+}
+
+.pwr-performer-card .pwr-scene-title-row {
+  min-height: 72px; /* Standardize height to align metadata fields horizontally across both cards */
+  margin-bottom: 15px;
+}
+
+/* Allow performer titles to wrap onto multiple lines since cards are taller */
+.pwr-performer-card .pwr-scene-title-row .pwr-scene-title {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 12px;
+  line-height: 1.25;
+  white-space: normal;
+  word-wrap: break-word;
+  word-break: break-word;
+  overflow: visible;
+  text-overflow: clip;
+}
+
 
