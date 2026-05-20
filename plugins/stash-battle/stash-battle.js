@@ -50,6 +50,32 @@
   function getSceneBattleCount(scene) { return getBattleCount(scene); }
   function setSceneBattleCount(scene, count) { setBattleCount(scene, count); }
 
+  // Get an item's current 1-based rank and total items in the opponent pool
+  function getCurrentRankAndTotal(itemId) {
+    if (!itemId) return { rank: null, total: 0 };
+    const searchParams = getSearchParams();
+    const sceneFilter = getSceneFilter(searchParams);
+    const hasFilter = sceneFilter || searchParams.has("c") || searchParams.get("q");
+    
+    const cache = getMemoryCache();
+    const allScenes = cache.allScenes || [];
+    const filteredScenes = cache.filteredScenes || allScenes;
+    
+    let opponentPool;
+    if (filterOpponents && hasFilter) {
+      opponentPool = filteredScenes;
+    } else {
+      const ratedOnly = allScenes.filter(s => getRating(s) != null);
+      opponentPool = ratedOnly.length >= 1 ? ratedOnly : allScenes;
+    }
+    
+    const idx = opponentPool.findIndex(s => String(s.id) === String(itemId));
+    if (idx === -1) {
+      return { rank: null, total: opponentPool.length };
+    }
+    return { rank: idx + 1, total: opponentPool.length };
+  }
+
   // Current comparison pair and mode
   let currentPair = { left: null, right: null };
   let currentRanks = { left: null, right: null };
@@ -2441,6 +2467,10 @@
     const newWinnerCount = winnerChange !== 0 ? winnerBattleCount + 1 : null;
     const newLoserCount = loserChange !== 0 ? loserBattleCount + 1 : null;
 
+    // Update local memory caches synchronously so the UI ranks update instantly
+    updateItemInCaches(winnerId, newWinnerRating, newWinnerCount);
+    updateItemInCaches(loserId, newLoserRating, newLoserCount);
+
     updateSceneRatingAndCount(winnerId, newWinnerRating, newWinnerCount);
     updateSceneRatingAndCount(loserId, newLoserRating, newLoserCount);
     
@@ -3104,6 +3134,19 @@
     // Get the loser's rank for #1 dethrone logic
     const loserRank = loserId === currentPair.left.id ? currentRanks.left : currentRanks.right;
 
+    // Capture old rank information
+    const winnerCount = getSceneBattleCount(winnerScene);
+    const winnerIsUnrated = getSceneRating(winnerScene) === null || winnerCount === 0;
+    const oldWinnerInfo = getCurrentRankAndTotal(winnerId);
+    const oldWinnerRank = winnerIsUnrated ? null : oldWinnerInfo.rank;
+    const oldWinnerTotal = oldWinnerInfo.total;
+
+    const loserCount = getSceneBattleCount(loserScene);
+    const loserIsUnrated = getSceneRating(loserScene) === null || loserCount === 0;
+    const oldLoserInfo = getCurrentRankAndTotal(loserId);
+    const oldLoserRank = loserIsUnrated ? null : oldLoserInfo.rank;
+    const oldLoserTotal = oldLoserInfo.total;
+
     // Handle gauntlet mode (champion tracking)
     if (currentMode === "gauntlet") {
       
@@ -3160,6 +3203,9 @@
         getSceneBattleCount(winnerScene), getSceneBattleCount(loserScene), loserRank
       );
       
+      const newWinnerInfo = getCurrentRankAndTotal(winnerId);
+      const newLoserInfo = getCurrentRankAndTotal(loserId);
+      
       if (winnerId === gauntletChampion.id) {
         gauntletDefeated.push(loserId);
         gauntletWins++;
@@ -3188,10 +3234,16 @@
       winnerCard.classList.add("pwr-winner");
       if (loserCard) loserCard.classList.add("pwr-loser");
       
-      showRatingAnimation(winnerCard, winnerRating, newWinnerRating, winnerChange, true);
+      showRatingAnimation(winnerCard, winnerRating, newWinnerRating, winnerChange, true,
+        { rank: oldWinnerRank, total: oldWinnerTotal },
+        { rank: newWinnerInfo.rank, total: newWinnerInfo.total }
+      );
       if (loserCard) {
         const loserDisplayNew = loserChange !== 0 ? newLoserRating : loserDisplayRating;
-        showRatingAnimation(loserCard, loserDisplayRating, loserDisplayNew, loserChange, false);
+        showRatingAnimation(loserCard, loserDisplayRating, loserDisplayNew, loserChange, false,
+          { rank: oldLoserRank, total: oldLoserTotal },
+          { rank: newLoserInfo.rank, total: newLoserInfo.total }
+        );
       }
       
       // Load new pair after animation
@@ -3216,6 +3268,9 @@
         getSceneBattleCount(winnerScene), getSceneBattleCount(loserScene), loserRank
       );
       
+      const newWinnerInfo = getCurrentRankAndTotal(winnerId);
+      const newLoserInfo = getCurrentRankAndTotal(loserId);
+      
       if (winnerId === gauntletChampion.id) {
         // Champion won - continue climbing
         gauntletDefeated.push(loserId);
@@ -3235,10 +3290,16 @@
       winnerCard.classList.add("pwr-winner");
       if (loserCard) loserCard.classList.add("pwr-loser");
       
-      showRatingAnimation(winnerCard, winnerRating, newWinnerRating, winnerChange, true);
+      showRatingAnimation(winnerCard, winnerRating, newWinnerRating, winnerChange, true,
+        { rank: oldWinnerRank, total: oldWinnerTotal },
+        { rank: newWinnerInfo.rank, total: newWinnerInfo.total }
+      );
       if (loserCard) {
         const loserDisplayNew = loserChange !== 0 ? newLoserRating : loserDisplayRating;
-        showRatingAnimation(loserCard, loserDisplayRating, loserDisplayNew, loserChange, false);
+        showRatingAnimation(loserCard, loserDisplayRating, loserDisplayNew, loserChange, false,
+          { rank: oldLoserRank, total: oldLoserTotal },
+          { rank: newLoserInfo.rank, total: newLoserInfo.total }
+        );
       }
       
       // Load new pair after animation
@@ -3254,6 +3315,9 @@
       getSceneBattleCount(winnerScene), getSceneBattleCount(loserScene)
     );
     
+    const newWinnerInfo = getCurrentRankAndTotal(winnerId);
+    const newLoserInfo = getCurrentRankAndTotal(loserId);
+    
     // Remove both scenes from filtered pool (they've been processed)
     // This prevents the loser from reappearing if it no longer matches the filter
     removeFromFilteredPool(currentPair.left.id);
@@ -3266,10 +3330,16 @@
     if (loserCard) loserCard.classList.add("pwr-loser");
 
     // Show rating change animation
-    showRatingAnimation(winnerCard, winnerRating, newWinnerRating, winnerChange, true);
+    showRatingAnimation(winnerCard, winnerRating, newWinnerRating, winnerChange, true,
+      { rank: oldWinnerRank, total: oldWinnerTotal },
+      { rank: newWinnerInfo.rank, total: newWinnerInfo.total }
+    );
     if (loserCard) {
       const loserDisplayNew = loserChange !== 0 ? newLoserRating : loserDisplayRating;
-      showRatingAnimation(loserCard, loserDisplayRating, loserDisplayNew, loserChange, false);
+      showRatingAnimation(loserCard, loserDisplayRating, loserDisplayNew, loserChange, false,
+        { rank: oldLoserRank, total: oldLoserTotal },
+        { rank: newLoserInfo.rank, total: newLoserInfo.total }
+      );
     }
 
     // Load new pair after animation
@@ -3278,11 +3348,44 @@
     }, 1500);
   }
 
-  function showRatingAnimation(card, oldRating, newRating, change, isWinner) {
+  function showRatingAnimation(card, oldRating, newRating, change, isWinner, oldRankInfo = null, newRankInfo = null) {
     // Create overlay
     const overlay = document.createElement("div");
     overlay.className = `pwr-rating-overlay ${isWinner ? 'pwr-rating-winner' : 'pwr-rating-loser'}`;
     
+    // Add Rank Transition text with simple, lightweight styling at the top
+    if (oldRankInfo && newRankInfo && newRankInfo.rank !== null) {
+      const rankDisplay = document.createElement("div");
+      rankDisplay.style.fontSize = "3rem";
+      rankDisplay.style.fontWeight = "bold";
+      rankDisplay.style.marginBottom = "12px";
+      rankDisplay.style.color = "rgba(255, 255, 255, 0.95)";
+      rankDisplay.style.textShadow = "0 2px 10px rgba(0, 0, 0, 0.3)";
+      
+      const newRank = newRankInfo.rank;
+      const total = newRankInfo.total;
+      let oldRankStr = "";
+      let suffix = "";
+      
+      if (oldRankInfo.rank === null) {
+        oldRankStr = "Unrated";
+        suffix = " (New)";
+      } else {
+        oldRankStr = String(oldRankInfo.rank);
+        const diff = oldRankInfo.rank - newRank; // old - new: positive means rank decreased (moved UP)
+        if (diff > 0) {
+          suffix = ` (▲ ${diff})`;
+        } else if (diff < 0) {
+          suffix = ` (▼ ${Math.abs(diff)})`;
+        } else {
+          suffix = " (—)";
+        }
+      }
+      
+      rankDisplay.textContent = `${oldRankStr} → ${newRank} / ${total}${suffix}`;
+      overlay.appendChild(rankDisplay);
+    }
+
     const ratingDisplay = document.createElement("div");
     ratingDisplay.className = "pwr-rating-display";
     ratingDisplay.textContent = oldRating;
