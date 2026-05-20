@@ -1,3 +1,7 @@
+!!! Documentation is out of date !!!
+!!! DO NOT BELIEVE STUFF THAT'S IN HERE FOR NOW !!!
+TODO: Update to account for group export, performer support, probably other stuff.
+
 # Stash Battle — Technical Documentation
 
 > For LLM agents and contributors working on the plugin. This documents the nuanced behavior, architecture, and design decisions that aren't obvious from the code alone.
