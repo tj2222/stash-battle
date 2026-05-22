@@ -2767,11 +2767,20 @@
     // Hide sync button for performers
     const syncButtonHtml = isPerformer ? "" : `<button id="pwr-sync-rankings-main-btn" class="btn btn-secondary" title="Sync ELO rankings to Stash Group">🔄 Sync Rankings</button>`;
 
+    const leaderboardLinkHtml = isPerformer
+      ? `<div class="pwr-leaderboard-link-container" style="margin-top: 8px;">
+          <button id="pwr-leaderboard-modal-btn" class="btn btn-link text-info p-0 font-weight-bold" style="text-decoration: none; font-size: 0.95rem;">
+            🏆 View Performer Leaderboard
+          </button>
+         </div>`
+      : "";
+
     return `
       <div id="stash-battle-container" class="pwr-container ${isPerformer ? 'pwr-performers-mode' : ''}">
         <div class="pwr-header">
           <h1 class="pwr-title">⚔️ Stash Battle</h1>
           <p class="pwr-subtitle">Compare ${itemNoun} head-to-head to build your rankings</p>
+          ${leaderboardLinkHtml}
           
           <div class="pwr-mode-toggle">
             <button class="pwr-mode-btn ${currentMode === 'swiss' ? 'active' : ''}" data-mode="swiss">
@@ -3803,6 +3812,16 @@
       mainSyncBtn.addEventListener("click", () => {
         if (disableChoice) return;
         executeRankingsSync();
+      });
+    }
+
+    // Leaderboard button click handler
+    const lbBtn = modal.querySelector("#pwr-leaderboard-modal-btn");
+    if (lbBtn) {
+      lbBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        closeRankingModal();
+        window.location.pathname = "/performer-battle-leaderboard";
       });
     }
 
