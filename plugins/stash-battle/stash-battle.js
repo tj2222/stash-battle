@@ -2743,6 +2743,14 @@
       </div>
     `;
 
+    // Decode images off-main-thread before display to prevent frame drops
+    comparisonArea.querySelectorAll("img.pwr-scene-image").forEach((img) => {
+      img.style.opacity = "0";
+      img.decode()
+        .then(() => { img.style.opacity = "1"; })
+        .catch(() => { img.style.opacity = "1"; });
+    });
+
     // Attach event listeners to scene body (for choosing)
     comparisonArea.querySelectorAll(".pwr-scene-body").forEach((body) => {
       body.addEventListener("click", handleChooseScene);
@@ -3291,51 +3299,34 @@
     overlay.appendChild(changeDisplay);
     card.appendChild(overlay);
 
-    // Animate the rating counting
-    let currentDisplay = oldRating;
-    const changeAmount = newRating - oldRating;
-    const duration = 800; // Animation duration in ms
-    const intervalTime = 30; // 30ms interval
-    const totalTicks = duration / intervalTime;
-    const increment = changeAmount / totalTicks;
-    let tickCount = 0;
-    
-    const interval = setInterval(() => {
-      tickCount++;
-      currentDisplay += increment;
-      ratingDisplay.textContent = Math.round(currentDisplay);
-      
-      if (tickCount >= totalTicks) {
-        clearInterval(interval);
-        ratingDisplay.textContent = newRating;
-      }
-    }, intervalTime);
+    // Animate rating and rank counting using requestAnimationFrame for smooth 60fps
+    const animDuration = 800;
+    const hasRankAnim = rankDisplay && startRank !== null && newRank !== null;
+    const ratingChangeAmount = newRating - oldRating;
+    const rankChangeAmount = hasRankAnim ? newRank - startRank : 0;
+    const startTotal = hasRankAnim ? oldRankInfo.total : 0;
+    const newTotal = hasRankAnim ? newRankInfo.total : 0;
+    const totalChangeAmount = newTotal - startTotal;
+    const animStart = performance.now();
 
-    // Animate the rank counting in sync
-    if (rankDisplay && startRank !== null && newRank !== null) {
-      let currentRankDisplay = startRank;
-      const rankChangeAmount = newRank - startRank;
-      const rankIncrement = rankChangeAmount / totalTicks;
-      
-      const startTotal = oldRankInfo.total;
-      const newTotal = newRankInfo.total;
-      let currentTotalDisplay = startTotal;
-      const totalChangeAmount = newTotal - startTotal;
-      const totalIncrement = totalChangeAmount / totalTicks;
-      let rankTickCount = 0;
-      
-      const rankInterval = setInterval(() => {
-        rankTickCount++;
-        currentRankDisplay += rankIncrement;
-        currentTotalDisplay += totalIncrement;
-        rankDisplay.textContent = `#${Math.round(currentRankDisplay)} / ${Math.round(currentTotalDisplay)}`;
-        
-        if (rankTickCount >= totalTicks) {
-          clearInterval(rankInterval);
+    function animateFrame(now) {
+      const progress = Math.min(1, (now - animStart) / animDuration);
+
+      if (progress < 1) {
+        ratingDisplay.textContent = Math.round(oldRating + ratingChangeAmount * progress);
+        if (hasRankAnim) {
+          rankDisplay.textContent = `#${Math.round(startRank + rankChangeAmount * progress)} / ${Math.round(startTotal + totalChangeAmount * progress)}`;
+        }
+        requestAnimationFrame(animateFrame);
+      } else {
+        ratingDisplay.textContent = newRating;
+        if (hasRankAnim) {
           rankDisplay.textContent = `#${newRank} / ${newTotal}`;
         }
-      }, intervalTime);
+      }
     }
+
+    requestAnimationFrame(animateFrame);
   }
 
   // ============================================
@@ -3725,14 +3716,9 @@
 
     addFloatingButton();
 
-    // Watch for SPA navigation
-    const observer = new MutationObserver(() => {
+    // Watch for SPA navigation using Stash's official PluginApi event
+    PluginApi.Event.addEventListener("stash:location", () => {
       addFloatingButton();
-    });
-
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
     });
   }
 
