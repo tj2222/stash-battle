@@ -53,21 +53,12 @@
   // Get an item's current 1-based rank and total items in the opponent pool
   function getCurrentRankAndTotal(itemId) {
     if (!itemId) return { rank: null, total: 0 };
-    const searchParams = getSearchParams();
-    const sceneFilter = getSceneFilter(searchParams);
-    const hasFilter = sceneFilter || searchParams.has("c") || searchParams.get("q");
     
     const cache = getMemoryCache();
     const allScenes = cache.allScenes || [];
-    const filteredScenes = cache.filteredScenes || allScenes;
     
-    let opponentPool;
-    if (filterOpponents && hasFilter) {
-      opponentPool = filteredScenes;
-    } else {
-      const ratedOnly = allScenes.filter(s => getRating(s) != null);
-      opponentPool = ratedOnly.length >= 1 ? ratedOnly : allScenes;
-    }
+    const ratedOnly = allScenes.filter(s => getRating(s) != null);
+    const opponentPool = ratedOnly.length >= 1 ? ratedOnly : allScenes;
     
     const idx = opponentPool.findIndex(s => String(s.id) === String(itemId));
     if (idx === -1) {
@@ -182,15 +173,6 @@
       performersMemoryCache = memoryCache;
     }
   }
-
-  // toggle: should scene2/opponents obey the same filter as scene1?
-  // default is true (apply filter to both sides); user can override via UI.
-  const DEFAULT_FILTER_OPPONENTS = true;
-  let filterOpponents = DEFAULT_FILTER_OPPONENTS;
-  try {
-    const stored = localStorage.getItem("pwr_filterOpponents");
-    if (stored !== null) filterOpponents = stored === "1";
-  } catch (e) { /* ignore */ }
 
   function resetGauntletState() {
     gauntletChampion = null;
@@ -1853,39 +1835,9 @@
     }
     
     // decide which list to draw opponents from; ranking numbers come from same list
-    // Right side should only show rated scenes unless filter applies to both sides
-    let opponentPool;
-    if (filterOpponents && hasFilter) {
-      opponentPool = filteredScenes;
-    } else {
-      const ratedOnly = allScenes.filter(s => getSceneRating(s) != null);
-      opponentPool = ratedOnly.length >= 1 ? ratedOnly : allScenes;
-    }
-
-    // If filtered opponent pool is too small, restart the cycle (clear removals, refresh cache)
-    if (opponentPool.length < 2 && filterOpponents && hasFilter) {
-      console.log("[Stash Battle] 🔄 Filtered opponent pool too small, restarting cycle...");
-      await clearFilteredCache();
-      shuffledFilteredScenes = [];
-      shuffleIndex = 0;
-      shuffleFilterKey = null;
-      removedSceneIds.clear();
-
-      const freshResult = await getFilteredScenesCached(searchParams, sceneFilter);
-      filteredScenes = freshResult.scenes || [];
-      opponentPool = filteredScenes;
-
-      // Re-pick scene1 from the refreshed pool
-      filterKey = buildFilterKey(searchParams, sceneFilter);
-      scene1 = getNextFilteredScene(filteredScenes, filterKey);
-      if (!scene1) {
-        throw new Error("No scenes match your filter criteria.");
-      }
-
-      if (opponentPool.length < 2) {
-        throw new Error("Not enough scenes in your filter for a match. You need at least 2 scenes.");
-      }
-    }
+    // Right side should only show rated scenes
+    const ratedOnly = allScenes.filter(s => getSceneRating(s) != null);
+    const opponentPool = ratedOnly.length >= 1 ? ratedOnly : allScenes;
 
     totalScenesCount = opponentPool.length;
 
@@ -1973,15 +1925,9 @@
       ? (await getFilteredScenesCached(searchParams, sceneFilter)).scenes || []
       : allScenes;
 
-    // choose pool for opponents / ranking; use filtered list when flag is on and a filter exists
-    // Right side should only show rated scenes unless filter applies to both sides
-    let opponentPool;
-    if (filterOpponents && hasFilter) {
-      opponentPool = filteredScenes;
-    } else {
-      const ratedOnly = allScenes.filter(s => getRating(s) != null);
-      opponentPool = ratedOnly.length >= 1 ? ratedOnly : allScenes;
-    }
+    // choose pool for opponents / ranking; right side should only show rated scenes
+    const ratedOnly = allScenes.filter(s => getRating(s) != null);
+    const opponentPool = ratedOnly.length >= 1 ? ratedOnly : allScenes;
     totalScenesCount = opponentPool.length;
 
     if (allScenes.length < 2) {
@@ -2134,14 +2080,9 @@
       ? (await getFilteredScenesCached(searchParams, sceneFilter)).scenes || []
       : allScenes;
       
-    // Right side should only show rated scenes unless filter applies to both sides
-    let opponentPool;
-    if (filterOpponents && hasFilter) {
-      opponentPool = filteredScenes;
-    } else {
-      const ratedOnly = allScenes.filter(s => getRating(s) != null);
-      opponentPool = ratedOnly.length >= 1 ? ratedOnly : allScenes;
-    }
+    // Right side should only show rated scenes
+    const ratedOnly = allScenes.filter(s => getRating(s) != null);
+    const opponentPool = ratedOnly.length >= 1 ? ratedOnly : allScenes;
     totalScenesCount = opponentPool.length;
     
     if (allScenes.length < 2) {
@@ -2820,13 +2761,6 @@
               <span class="pwr-mode-desc">Winner stays on</span>
             </button>
           </div>
-
-          <div class="pwr-opponents-toggle" style="margin-top:8px;">
-            <label>
-              <input type="checkbox" id="pwr-filter-opponents-checkbox" ${filterOpponents ? "checked" : ""}>
-               Use filtered ${itemNoun} for both sides
-            </label>
-          </div>
         </div>
 
         <div class="pwr-content">
@@ -3263,20 +3197,11 @@
 
     // Handle gauntlet mode (binary search model)
     if (currentMode === "gauntlet") {
-      const searchParams = getSearchParams();
-      const sceneFilter = getSceneFilter(searchParams);
-      const hasFilter = sceneFilter || searchParams.has("c") || searchParams.get("q");
       const cache = getMemoryCache();
       const allScenes = cache.allScenes || [];
-      const filteredScenes = cache.filteredScenes || allScenes;
 
-      let opponentPool;
-      if (filterOpponents && hasFilter) {
-        opponentPool = filteredScenes;
-      } else {
-        const ratedOnly = allScenes.filter(s => getRating(s) != null);
-        opponentPool = ratedOnly.length >= 1 ? ratedOnly : allScenes;
-      }
+      const ratedOnly = allScenes.filter(s => getRating(s) != null);
+      const opponentPool = ratedOnly.length >= 1 ? ratedOnly : allScenes;
       
       const searchPool = opponentPool.filter(s => s.id !== gauntletChampion.id);
       const opponent = currentPair.left.id === gauntletChampion.id ? currentPair.right : currentPair.left;
@@ -3685,23 +3610,6 @@
         }
       });
     });
-
-    // Opponents filter checkbox
-    const oppCheckbox = modal.querySelector("#pwr-filter-opponents-checkbox");
-    if (oppCheckbox) {
-      oppCheckbox.addEventListener("change", (e) => {
-        filterOpponents = e.target.checked;
-        try {
-          localStorage.setItem("pwr_filterOpponents", filterOpponents ? "1" : "0");
-        } catch {}
-        // switching the toggle counts as changing filters: reset gauntlet/champion run
-        if (currentMode === "gauntlet" || currentMode === "champion") {
-          resetGauntletState();
-        }
-        saveState();
-        loadNewPair();
-      });
-    }
 
     // Skip button
     const skipBtn = modal.querySelector("#pwr-skip-btn");

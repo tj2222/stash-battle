@@ -46,7 +46,6 @@ All state lives in closure-scoped variables (no globals). Key variables:
 | `gauntletFalling` | Boolean — true when a champion lost and is finding their floor |
 | `gauntletFallingScene` | The scene object currently in falling mode |
 | `totalScenesCount` | Size of the opponent pool (used for "Rank #X of Y" display) |
-| `filterOpponents` | Whether the right-side pool obeys the same filter as the left side |
 
 ---
 
@@ -73,13 +72,10 @@ Scenes matching the current URL filter parameters (`c`, `q` params). If no filte
 Determined per-fetch in each mode function:
 
 ```
-if filterOpponents AND hasFilter → opponentPool = filteredScenes
-else → opponentPool = allScenes (rated only)
+opponentPool = allScenes (rated only)
 ```
 
-**Critical behavior**: When the opponent pool comes from `allScenes`, unrated scenes are **excluded** (filtered to check that the custom field `battle-rating` is not `null` and `battle-count` is greater than 0). This prevents unrated scenes from appearing as right-side opponents. If no rated scenes exist yet (bootstrap), it falls back to `allScenes` including unrated.
-
-**Exception**: When `filterOpponents` is true and a filter is active, the filtered pool is used as-is for both sides — unrated scenes may appear on the right if the filter includes them. This is intentional for scenarios like filtering for "unrated only" on both sides to bootstrap ratings.
+**Critical behavior**: The opponent pool is always drawn from `allScenes` with unrated scenes **excluded** (filtered to check that the custom ELO rating is not `null` and the battle count is greater than 0). This prevents unrated scenes from appearing as right-side opponents. If no rated scenes exist yet (bootstrap), it falls back to using the full list including unrated.
 
 ### `totalScenesCount`
 Set from `opponentPool.length` (not `allScenes.length`), so the "Rank #X of Y" display is consistent with the pool the ranks come from.
