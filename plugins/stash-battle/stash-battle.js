@@ -2186,10 +2186,21 @@
     }
     const scene1RankInPool = scene1IdxInPool >= 0 ? scene1IdxInPool + 1 : null;
 
+    // 1. Once a scene lands at #1 rank, we should consider the championship round completed!
+    if (scene1RankInPool === 1) {
+      console.log(`[Stash Battle] 👑 Champion LHS reached Rank #1! Victory screen triggered.`);
+      return {
+        scenes: [scene1],
+        ranks: [1],
+        isVictory: true
+      };
+    }
+
+    // 2. Choose RHS (scene2) using Swiss logic (equal or greater rating only):
     // Collect candidates near scene1 in opponentPool, expanding reach if needed
     let candidates = [];
     for (let reach = 10; candidates.length === 0 && reach <= opponentPool.length; reach *= 2) {
-      for (let i = effectiveScene1Idx - reach; i <= effectiveScene1Idx + reach; i++) {
+      for (let i = effectiveScene1Idx - reach; i < effectiveScene1Idx; i++) {
         if (i >= 0 && i < opponentPool.length && i !== scene1IdxInPool) {
           candidates.push({ scene: opponentPool[i], idx: i });
         }
@@ -2941,7 +2952,7 @@
     // Update skip button state
     const skipBtn = document.querySelector("#pwr-skip-btn");
     if (skipBtn) {
-      const disableSkip = (currentMode === "gauntlet" || currentMode === "champion") && gauntletChampion;
+      const disableSkip = currentMode === "gauntlet" && gauntletChampion;
       skipBtn.disabled = disableSkip;
       skipBtn.style.opacity = disableSkip ? "0.5" : "1";
       skipBtn.style.cursor = disableSkip ? "not-allowed" : "pointer";
@@ -3674,8 +3685,8 @@
     const skipBtn = modal.querySelector("#pwr-skip-btn");
     if (skipBtn) {
       skipBtn.addEventListener("click", () => {
-        // In gauntlet/champion mode with active run, skip is disabled
-        if ((currentMode === "gauntlet" || currentMode === "champion") && gauntletChampion) {
+        // In gauntlet mode with active run, skip is disabled
+        if (currentMode === "gauntlet" && gauntletChampion) {
           return;
         }
         if(disableChoice) return
@@ -3823,8 +3834,8 @@
         }
         e.preventDefault();
         e.stopImmediatePropagation();
-        // Don't skip during active gauntlet/champion run
-        if ((currentMode === "gauntlet" || currentMode === "champion") && gauntletChampion) {
+        // Don't skip during active gauntlet run
+        if (currentMode === "gauntlet" && gauntletChampion) {
           return;
         }
         if(disableChoice) return;
