@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const STORAGE_KEY = "stash-battle-state";
+  const MODE_STORAGE_KEY = "stash-battle-mode";
   const CACHE_DB_NAME = "stash-battle-cache";
   const CACHE_DB_VERSION = 1;
   const CACHE_STORE_NAME = "scenes";
@@ -77,7 +77,6 @@
   let gauntletHigh = -1; // Upper bound index of the active binary search
   let totalScenesCount = 0; // Total items for position display
   let disableChoice = false; // Track when inputs should be disabled to prevent multiple events
-  let savedFilterParams = ""; // Store URL filter params to detect changes
   let openedFromItemId = null; // Track item ID (scene or performer) when modal is opened from an individual page
 
   // Shuffled pools for both targets (isolated)
@@ -136,9 +135,7 @@
     return battleTarget === "scenes" ? "filtered-scenes" : "filtered-performers";
   }
 
-  function getStorageKey() {
-    return `stash-battle-state-${battleTarget}`;
-  }
+
 
   function resetGauntletState() {
     gauntletChampion = null;
@@ -573,86 +570,51 @@
     battleTarget = target;
   }
 
-  function saveState() {
-    const state = {
-      currentPair,
-      currentRanks,
-      currentMode,
-      gauntletChampion,
-      gauntletWins,
-      gauntletChampionRank,
-      gauntletDefeated,
-      gauntletFalling,
-      gauntletFallingScene,
-      gauntletLow,
-      gauntletHigh,
-      totalScenesCount,
-      savedFilterParams: window.location.search
-    };
+  function loadMode() {
     try {
-      localStorage.setItem(getStorageKey(), JSON.stringify(state));
-      localStorage.setItem("stash-battle-target", battleTarget);
+      currentMode = localStorage.getItem(MODE_STORAGE_KEY) || "swiss";
     } catch (e) {
-      console.error("[Stash Battle] Failed to save state:", e);
+      currentMode = "swiss";
     }
   }
 
-  function loadState() {
+  function saveMode() {
     try {
-      let saved = localStorage.getItem(getStorageKey());
-      if (!saved && battleTarget === "scenes") {
-        // Fall back to old scene storage key
-        saved = localStorage.getItem(STORAGE_KEY);
-      }
-      if (saved) {
-        const state = JSON.parse(saved);
-        currentPair = state.currentPair || { left: null, right: null };
-        currentRanks = state.currentRanks || { left: null, right: null };
-        currentMode = state.currentMode || "swiss";
-        gauntletChampion = state.gauntletChampion || null;
-        gauntletWins = state.gauntletWins || 0;
-        gauntletChampionRank = state.gauntletChampionRank || 0;
-        gauntletDefeated = state.gauntletDefeated || [];
-        gauntletFalling = state.gauntletFalling || false;
-        gauntletFallingScene = state.gauntletFallingScene || null;
-        gauntletLow = state.gauntletLow !== undefined ? state.gauntletLow : -1;
-        gauntletHigh = state.gauntletHigh !== undefined ? state.gauntletHigh : -1;
-        totalScenesCount = state.totalScenesCount || 0;
-        savedFilterParams = state.savedFilterParams || "";
-        return true;
-      }
+      localStorage.setItem(MODE_STORAGE_KEY, currentMode);
     } catch (e) {
-      console.error("[Stash Battle] Failed to load state:", e);
+      console.error("[Stash Battle] Failed to save mode:", e);
     }
-    return false;
   }
-
-  function clearState() {
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-    } catch (e) {
-      console.error("[Stash Battle] Failed to clear state:", e);
-    }
-  } 
 
   // ============================================
   // GRAPHQL QUERIES
   // ============================================
 
-  async function graphqlQuery(query, variables = {}) {
-    const response = await fetch("/graphql", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ query, variables }),
-    });
-    const result = await response.json();
-    if (result.errors) {
-      console.error("[Stash Battle] GraphQL error:", result.errors);
-      throw new Error(result.errors[0].message);
+  async function graphqlQuery(query, variables = {}, retries = 1) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const response = await fetch("/graphql", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ query, variables }),
+        });
+        const result = await response.json();
+        if (result.errors) {
+          console.error("[Stash Battle] GraphQL error:", result.errors);
+          throw new Error(result.errors[0].message);
+        }
+        return result.data;
+      } catch (e) {
+        if (attempt < retries && e instanceof TypeError) {
+          console.warn(`[Stash Battle] ⚠️ Network error, retrying in 1s...`, e.message);
+          await new Promise(r => setTimeout(r, 1000));
+          continue;
+        }
+        throw e;
+      }
     }
-    return result.data;
   }
 
   const MINIMAL_SCENE_FRAGMENT = `
@@ -817,6 +779,18 @@
   `;
 
 
+  function sortByRatingDesc(items) {
+    items.sort((a, b) => {
+      const rA = getRating(a);
+      const rB = getRating(b);
+      if (rA === null && rB === null) return 0;
+      if (rA === null) return 1;
+      if (rB === null) return -1;
+      return rB - rA;
+    });
+    return items;
+  }
+
   // Fetch either scenes or performers from network depending on battleTarget
   async function fetchItems(filter, itemFilter = null) {
     if (battleTarget === "scenes") {
@@ -824,17 +798,8 @@
         filter,
         scene_filter: itemFilter
       });
-      const scenes = data.findScenes.scenes || [];
-      scenes.sort((a, b) => {
-        const rA = getRating(a);
-        const rB = getRating(b);
-        if (rA === null && rB === null) return 0;
-        if (rA === null) return 1;
-        if (rB === null) return -1;
-        return rB - rA;
-      });
       return {
-        items: scenes,
+        items: sortByRatingDesc(data.findScenes.scenes || []),
         count: data.findScenes.count || 0
       };
     } else {
@@ -842,17 +807,8 @@
         filter,
         performer_filter: itemFilter
       });
-      const performers = data.findPerformers.performers || [];
-      performers.sort((a, b) => {
-        const rA = getRating(a);
-        const rB = getRating(b);
-        if (rA === null && rB === null) return 0;
-        if (rA === null) return 1;
-        if (rB === null) return -1;
-        return rB - rA;
-      });
       return {
-        items: performers,
+        items: sortByRatingDesc(data.findPerformers.performers || []),
         count: data.findPerformers.count || 0
       };
     }
@@ -1098,7 +1054,7 @@
       pool.shuffleFilterKey = null;
       pool.removedIds.clear();
       resetGauntletState();
-      saveState();
+
 
       // Show actions button container again
       const actionsEl = document.querySelector(".pwr-actions");
@@ -2087,121 +2043,75 @@
     };
   }
   
-  function createVictoryScreen(champion) {
-    const isPerformer = battleTarget === "performers";
-    const itemNoun = isPerformer ? "performers" : "scenes";
-    
-    let title = "";
-    let imageHtml = "";
-    
-    if (isPerformer) {
-      title = champion.name || "";
-      if (champion.disambiguation) {
-        title += ` (${champion.disambiguation})`;
-      }
-      if (!title) {
-        title = `Performer #${champion.id}`;
-      }
-      
-      const imagePath = champion.image_path || null;
-      if (imagePath) {
-        imageHtml = `<img class="pwr-victory-image pwr-performer-image" src="${imagePath}" alt="${title}" />`;
-      } else if (champion.images && champion.images.length > 0) {
-        const firstImg = champion.images[0].paths.image || champion.images[0].paths.thumbnail;
-        imageHtml = `<img class="pwr-victory-image pwr-performer-image" src="${firstImg}" alt="${title}" />`;
-      } else {
-        imageHtml = `<div class="pwr-victory-image pwr-performer-image pwr-no-image">No Image</div>`;
-      }
-    } else {
-      const file = champion.files && champion.files[0] ? champion.files[0] : {};
-      title = champion.title;
-      if (!title && file.path) {
-        const pathParts = file.path.split(/[/\\]/);
-        title = pathParts[pathParts.length - 1].replace(/\.[^/.]+$/, "");
-      }
-      if (!title) {
-        title = `Scene #${champion.id}`;
-      }
-      
-      const screenshotPath = champion.paths ? champion.paths.screenshot : null;
-      imageHtml = screenshotPath 
-        ? `<img class="pwr-victory-image" src="${screenshotPath}" alt="${title}" />`
-        : `<div class="pwr-victory-image pwr-no-image">No Screenshot</div>`;
+  // Shared helpers for item display across end screens
+  function getItemTitle(item) {
+    if (battleTarget === "performers") {
+      let title = item.name || "";
+      if (item.disambiguation) title += ` (${item.disambiguation})`;
+      return title || `Performer #${item.id}`;
     }
-    
+    const file = item.files?.[0] ?? {};
+    let title = item.title;
+    if (!title && file.path) {
+      const pathParts = file.path.split(/[/\\]/);
+      title = pathParts[pathParts.length - 1].replace(/\.[^/.]+$/, "");
+    }
+    return title || `Scene #${item.id}`;
+  }
+
+  function getItemImageHtml(item, cssClass = "pwr-victory-image") {
+    if (battleTarget === "performers") {
+      const imagePath = item.image_path || null;
+      if (imagePath) {
+        return `<img class="${cssClass} pwr-performer-image" src="${imagePath}" alt="${getItemTitle(item)}" />`;
+      }
+      if (item.images?.length > 0) {
+        const firstImg = item.images[0].paths.image || item.images[0].paths.thumbnail;
+        return `<img class="${cssClass} pwr-performer-image" src="${firstImg}" alt="${getItemTitle(item)}" />`;
+      }
+      return `<div class="${cssClass} pwr-performer-image pwr-no-image">No Image</div>`;
+    }
+    const screenshotPath = item.paths?.screenshot ?? null;
+    return screenshotPath
+      ? `<img class="${cssClass}" src="${screenshotPath}" alt="${getItemTitle(item)}" />`
+      : `<div class="${cssClass} pwr-no-image">No Screenshot</div>`;
+  }
+
+  function createEndScreen(item, { icon, heading, statsHtml, buttonText }) {
     return `
       <div class="pwr-victory-screen">
-        <div class="pwr-victory-crown">👑</div>
-        <h2 class="pwr-victory-title">CHAMPION!</h2>
+        <div class="pwr-victory-crown">${icon}</div>
+        <h2 class="pwr-victory-title">${heading}</h2>
         <div class="pwr-victory-scene">
-          ${imageHtml}
+          ${getItemImageHtml(item)}
         </div>
-        <h3 class="pwr-victory-name">${title}</h3>
-        <p class="pwr-victory-stats">Conquered all ${totalScenesCount} ${itemNoun} with a ${gauntletWins} win streak!</p>
-        <button id="pwr-new-gauntlet" class="btn btn-primary">Start New Gauntlet</button>
+        <h3 class="pwr-victory-name">${getItemTitle(item)}</h3>
+        <p class="pwr-victory-stats">${statsHtml}</p>
+        <button id="pwr-new-gauntlet" class="btn btn-primary">${buttonText}</button>
       </div>
     `;
+  }
+
+  function createVictoryScreen(champion) {
+    const itemNoun = battleTarget === "performers" ? "performers" : "scenes";
+    return createEndScreen(champion, {
+      icon: "👑",
+      heading: "CHAMPION!",
+      statsHtml: `Conquered all ${totalScenesCount} ${itemNoun} with a ${gauntletWins} win streak!`,
+      buttonText: "Start New Gauntlet"
+    });
   }
 
   function showPlacementScreen(scene, rank, finalRating) {
     const comparisonArea = document.getElementById("pwr-comparison-area");
     if (!comparisonArea) return;
-    
-    const isPerformer = battleTarget === "performers";
-    
-    let title = "";
-    let imageHtml = "";
-    
-    if (isPerformer) {
-      title = scene.name || "";
-      if (scene.disambiguation) {
-        title += ` (${scene.disambiguation})`;
-      }
-      if (!title) {
-        title = `Performer #${scene.id}`;
-      }
-      
-      const imagePath = scene.image_path || null;
-      if (imagePath) {
-        imageHtml = `<img class="pwr-victory-image pwr-performer-image" src="${imagePath}" alt="${title}" />`;
-      } else if (scene.images && scene.images.length > 0) {
-        const firstImg = scene.images[0].paths.image || scene.images[0].paths.thumbnail;
-        imageHtml = `<img class="pwr-victory-image pwr-performer-image" src="${firstImg}" alt="${title}" />`;
-      } else {
-        imageHtml = `<div class="pwr-victory-image pwr-performer-image pwr-no-image">No Image</div>`;
-      }
-    } else {
-      const file = scene.files && scene.files[0] ? scene.files[0] : {};
-      title = scene.title;
-      if (!title && file.path) {
-        const pathParts = file.path.split(/[/\\]/);
-        title = pathParts[pathParts.length - 1].replace(/\.[^/.]+$/, "");
-      }
-      if (!title) {
-        title = `Scene #${scene.id}`;
-      }
-      
-      const screenshotPath = scene.paths ? scene.paths.screenshot : null;
-      imageHtml = screenshotPath 
-        ? `<img class="pwr-victory-image" src="${screenshotPath}" alt="${title}" />`
-        : `<div class="pwr-victory-image pwr-no-image">No Screenshot</div>`;
-    }
-    
-    comparisonArea.innerHTML = `
-      <div class="pwr-victory-screen">
-        <div class="pwr-victory-crown">📍</div>
-        <h2 class="pwr-victory-title">PLACED!</h2>
-        <div class="pwr-victory-scene">
-          ${imageHtml}
-        </div>
-        <h3 class="pwr-victory-name">${title}</h3>
-        <p class="pwr-victory-stats">
-          Rank <strong>#${rank}</strong> of ${totalScenesCount}<br>
-          Rating: <strong>${finalRating}</strong>
-        </p>
-        <button id="pwr-new-gauntlet" class="btn btn-primary">Start New Run</button>
-      </div>
-    `;
+
+    comparisonArea.innerHTML = createEndScreen(scene, {
+      icon: "📍",
+      heading: "PLACED!",
+      statsHtml: `Rank <strong>#${rank}</strong> of ${totalScenesCount}<br>Rating: <strong>${finalRating}</strong>`,
+      buttonText: "Start New Run"
+    });
     
     // Hide status and actions
     const statusEl = document.getElementById("pwr-gauntlet-status");
@@ -2210,8 +2120,7 @@
     if (actionsEl) actionsEl.style.display = "none";
     
     resetGauntletState();
-    saveState();
-    
+
     // Attach button handler
     const newBtn = comparisonArea.querySelector("#pwr-new-gauntlet");
     if (newBtn) {
@@ -2232,43 +2141,24 @@
       partialFields[BATTLE_COUNT_CUSTOM_FIELD_KEY] = battleCount;
     }
 
-    let mutation;
-    let variables;
-    if (battleTarget === "scenes") {
-      mutation = `
-        mutation SceneUpdate($input: SceneUpdateInput!) {
-          sceneUpdate(input: $input) {
-            id
-            custom_fields
-          }
+    const typeName = battleTarget === "scenes" ? "Scene" : "Performer";
+    const mutationName = battleTarget === "scenes" ? "sceneUpdate" : "performerUpdate";
+    const mutation = `
+      mutation ${typeName}Update($input: ${typeName}UpdateInput!) {
+        ${mutationName}(input: $input) {
+          id
+          custom_fields
         }
-      `;
-      variables = {
-        input: {
-          id: itemId,
-          custom_fields: {
-            partial: partialFields
-          }
+      }
+    `;
+    const variables = {
+      input: {
+        id: itemId,
+        custom_fields: {
+          partial: partialFields
         }
-      };
-    } else {
-      mutation = `
-        mutation PerformerUpdate($input: PerformerUpdateInput!) {
-          performerUpdate(input: $input) {
-            id
-            custom_fields
-          }
-        }
-      `;
-      variables = {
-        input: {
-          id: itemId,
-          custom_fields: {
-            partial: partialFields
-          }
-        }
-      };
-    }
+      }
+    };
 
     try {
       await graphqlQuery(mutation, variables);
@@ -2323,8 +2213,8 @@
   }
 
   function handleComparison(winnerId, loserId, winnerCurrentRating, loserCurrentRating, winnerBattleCount = 0, loserBattleCount = 0, loserRank = null) {
-    const winnerRating = winnerCurrentRating || DEFAULT_RATING;
-    const loserRating = loserCurrentRating || DEFAULT_RATING;
+    const winnerRating = winnerCurrentRating ?? DEFAULT_RATING;
+    const loserRating = loserCurrentRating ?? DEFAULT_RATING;
     
     let winnerGain = 0;
     let loserLoss = 0;
@@ -2919,7 +2809,7 @@
           if (newGauntletBtn) {
             newGauntletBtn.addEventListener("click", () => {
               resetGauntletState();
-              saveState();
+
               // Show the actions again
               if (actionsEl) actionsEl.style.display = "";
               loadNewPair();
@@ -2955,7 +2845,7 @@
           if (newGauntletBtn) {
             newGauntletBtn.addEventListener("click", () => {
               resetGauntletState();
-              saveState();
+
               if (actionsEl) actionsEl.style.display = "";
               loadNewPair();
             });
@@ -2998,7 +2888,7 @@
       console.log(`[Stash Battle] ✅ Pair loaded & hydrated in ${loadTime}ms: Item ${scenes[0].id} (rank #${ranks[0]}) vs Item ${scenes[1].id} (rank #${ranks[1]})`);
 
       renderPair([fullLeft, fullRight], ranks);
-      saveState();
+
 
       // Proactively pre-fetch next deterministic left-side scene in background
       setTimeout(triggerPrefetch, 100);
@@ -3037,21 +2927,7 @@
     }
   }
 
-  function restoreCurrentPair() {
-    disableChoice = false;
-    console.log("[Stash Battle] 📂 Rendering saved pair (no network fetch needed)");
 
-    // Pre-warm the cache in background for when user makes a choice
-    if (!getMemoryCache().allScenes) {
-      console.log("[Stash Battle] 🔥 Pre-warming cache in background...");
-      getAllScenesCached(); // Don't await - runs in background
-    }
-
-    renderPair(
-      [currentPair.left, currentPair.right],
-      [currentRanks.left, currentRanks.right]
-    );
-  }
 
   let isWaitingForDismissal = false;
 
@@ -3141,7 +3017,7 @@
       }
 
       gauntletWins++;
-      saveState();
+
 
       // Visual feedback: green border on winner, red on loser
       winnerCard.classList.add("pwr-winner");
@@ -3181,7 +3057,7 @@
         gauntletWins = 1;
       }
       
-      saveState();
+
       
       // Visual feedback with animations
       winnerCard.classList.add("pwr-winner");
@@ -3218,7 +3094,7 @@
     removeFromFilteredPool(currentPair.left.id);
     removeFromFilteredPool(currentPair.right.id);
 
-    saveState();
+
 
     // Visual feedback
     winnerCard.classList.add("pwr-winner");
@@ -3409,9 +3285,8 @@
       setBattleTarget("scenes");
     }
     
-    // Try to load saved state
-    const hasState = loadState();
-    console.log(`[Stash Battle] 📋 LocalStorage state: ${hasState ? 'found' : 'none'}`);
+    // Load persisted mode preference
+    loadMode();
     
     // Set openedFromItemId if we are on a scene or performer detail page
     const currentItemId = getCurrentPageItemId();
@@ -3422,36 +3297,10 @@
       openedFromItemId = null;
     }
     
-    // Check if URL filter params have changed - if so, reset state
-    const currentFilterParams = window.location.search;
-    const filtersChanged = hasState && savedFilterParams !== currentFilterParams;
-    
-    if (filtersChanged) {
-      console.log("[Stash Battle] Filter params changed, resetting gauntlet state and filtered cache");
-      currentPair = { left: null, right: null };
-      currentRanks = { left: null, right: null };
-      resetGauntletState();
-      savedFilterParams = currentFilterParams;
-      
-      // Clear filtered cache
-      clearFilteredCache();
-      
-      // Reset shuffle for new filter
-      const pool = getSessionPool();
-      pool.shuffledFiltered = [];
-      pool.shuffleIndex = 0;
-      pool.shuffleFilterKey = null;
-    }
-    
     // Recreate modal every time to ensure fresh content matching battleTarget
     const existingModal = document.getElementById("pwr-modal");
     if (existingModal) {
       existingModal.remove();
-    }
-    
-    // Initialize filter params tracking
-    if (!savedFilterParams) {
-      savedFilterParams = currentFilterParams;
     }
 
     const modal = document.createElement("div");
@@ -3506,7 +3355,7 @@
           
           // Load new pair in new mode
           loadNewPair();
-          saveState();
+          saveMode();
         }
       });
     });
@@ -3527,7 +3376,7 @@
         // Reset state on skip
         if (currentMode === "gauntlet" || currentMode === "champion") {
           resetGauntletState();
-          saveState();
+
         }
         loadNewPair();
       });
@@ -3554,7 +3403,7 @@
           
           // Reset gauntlet state since rankings may have changed
           resetGauntletState();
-          saveState();
+
           
           // Re-show actions in case hidden
           const actionsEl = document.querySelector(".pwr-actions");
@@ -3598,23 +3447,8 @@
       });
     }
 
-    // Load initial comparison or restore saved pair
-    if (hasState && currentPair.left && currentPair.right && !filtersChanged) {
-      const shouldStartNewGauntlet = openedFromItemId && 
-                                    (currentMode === "gauntlet" || currentMode === "champion") && 
-                                    (!gauntletChampion || String(gauntletChampion.id) !== String(openedFromItemId));
-      
-      if (shouldStartNewGauntlet) {
-        console.log("[Stash Battle] 🆕 Starting new gauntlet/champion run with current page item");
-        loadNewPair();
-      } else {
-        console.log(`[Stash Battle] 📂 Restoring saved pair from localStorage (Item ${currentPair.left.id} vs Item ${currentPair.right.id})`);
-        restoreCurrentPair();
-      }
-    } else {
-      console.log(`[Stash Battle] 🆕 No saved pair or filters changed, loading new pair...`);
-      loadNewPair();
-    }
+    // Always load a fresh pair (state is not persisted across page loads)
+    loadNewPair();
 
     // Close handlers
     modal.querySelector(".pwr-modal-backdrop").addEventListener("click", closeRankingModal);
@@ -3676,7 +3510,7 @@
         
         if (currentMode === "gauntlet" || currentMode === "champion") {
           resetGauntletState();
-          saveState();
+
         }
         loadNewPair();
       }
