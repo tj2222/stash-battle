@@ -2074,8 +2074,16 @@
       };
     }
 
-    // Pick midpoint
-    const mid = Math.floor((gauntletLow + gauntletHigh) / 2);
+    // Pick midpoint with up to 10% range jitter
+    const rangeSize = gauntletHigh - gauntletLow;
+    const maxWiggle = Math.floor(rangeSize * 0.1);
+    let offset = 0;
+    if (maxWiggle > 0) {
+      offset = Math.floor(Math.random() * (2 * maxWiggle + 1)) - maxWiggle;
+    }
+    let mid = Math.floor((gauntletLow + gauntletHigh) / 2) + offset;
+    mid = Math.max(gauntletLow, Math.min(gauntletHigh - 1, mid));
+
     const opponent = searchPool[mid];
 
     // Find the opponent's 1-based rank in the main opponentPool
@@ -3244,7 +3252,11 @@
       }
       
       const searchPool = opponentPool.filter(s => s.id !== gauntletChampion.id);
-      const mid = Math.floor((gauntletLow + gauntletHigh) / 2);
+      const opponent = currentPair.left.id === gauntletChampion.id ? currentPair.right : currentPair.left;
+      let mid = searchPool.findIndex(s => s.id === opponent.id);
+      if (mid === -1) {
+        mid = Math.floor((gauntletLow + gauntletHigh) / 2);
+      }
 
       if (winnerId === gauntletChampion.id) {
         // Challenger wins - correct index is <= mid
