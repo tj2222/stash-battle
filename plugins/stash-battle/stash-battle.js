@@ -86,6 +86,8 @@
   let gauntletDefeated = []; // IDs of items defeated in current run
   let gauntletFalling = false; // True when champion lost and is finding their floor
   let gauntletFallingScene = null; // The item that's falling to find its position
+  let gauntletLow = -1; // Lower bound index of the active binary search
+  let gauntletHigh = -1; // Upper bound index of the active binary search
   let totalScenesCount = 0; // Total items for position display
   let disableChoice = false; // Track when inputs should be disabled to prevent multiple events
   let savedFilterParams = ""; // Store URL filter params to detect changes
@@ -197,6 +199,8 @@
     gauntletDefeated = [];
     gauntletFalling = false;
     gauntletFallingScene = null;
+    gauntletLow = -1;
+    gauntletHigh = -1;
   }
 
   // Open IndexedDB database
@@ -641,6 +645,8 @@
       gauntletDefeated,
       gauntletFalling,
       gauntletFallingScene,
+      gauntletLow,
+      gauntletHigh,
       totalScenesCount,
       savedFilterParams: window.location.search
     };
@@ -670,6 +676,8 @@
         gauntletDefeated = state.gauntletDefeated || [];
         gauntletFalling = state.gauntletFalling || false;
         gauntletFallingScene = state.gauntletFallingScene || null;
+        gauntletLow = state.gauntletLow !== undefined ? state.gauntletLow : -1;
+        gauntletHigh = state.gauntletHigh !== undefined ? state.gauntletHigh : -1;
         totalScenesCount = state.totalScenesCount || 0;
         savedFilterParams = state.savedFilterParams || "";
         syncFromTarget();
@@ -1932,30 +1940,32 @@
     return { scene: scenes[fallbackIndex], index: fallbackIndex };
   }
 
-  // Gauntlet mode: champion vs next challenger
-  // Left side (champion): initially picked from filtered pool (scenes to be rated)
+  // Gauntlet mode: champion vs next challenger using Binary Search
+  // Left side (champion): initially picked from filtered pool (scenes/performers to be rated)
   // Right side (opponents): from full collection
   async function fetchGauntletPair() {
     const searchParams = getSearchParams();
     const sceneFilter = getSceneFilter(searchParams);
     const hasFilter = sceneFilter || searchParams.has("c") || searchParams.get("q");
 
-    // Get ALL scenes for opponent pool and ranking - CACHED
-    console.log("[Stash Battle] 📋 Fetching all scenes for gauntlet...");
+    // Get ALL items for opponent pool and ranking - CACHED
+    console.log("[Stash Battle] 📋 Fetching all items for gauntlet...");
     const allResult = await getAllScenesCached();
     const allScenes = allResult.scenes || [];
 
-    // Use the current page scene as champion if we opened from a scene page
-    if (openedFromSceneId) {
-      const currentScene = allScenes.find(s => String(s.id) === String(openedFromSceneId));
-      if (currentScene) {
-        if (!gauntletChampion || String(gauntletChampion.id) !== String(openedFromSceneId)) {
-          console.log(`[Stash Battle] 🎯 Initializing gauntlet champion to current page scene: ${currentScene.id}`);
+    // Use the current page scene/performer as champion if we opened from an individual item page
+    const activeOpenId = openedFromSceneId || openedFromPerformerId;
+    if (activeOpenId) {
+      const currentItem = allScenes.find(s => String(s.id) === String(activeOpenId));
+      if (currentItem) {
+        if (!gauntletChampion || String(gauntletChampion.id) !== String(activeOpenId)) {
+          console.log(`[Stash Battle] 🎯 Initializing gauntlet champion to current page item: ${currentItem.id}`);
           resetGauntletState();
-          gauntletChampion = currentScene;
+          gauntletChampion = currentItem;
         }
       }
-      openedFromSceneId = null; // Clear so subsequent loading doesn't force it
+      openedFromSceneId = null;
+      openedFromPerformerId = null;
     }
 
     // compute filtered list once (used for left side and, optionally, for opponents)
@@ -1969,7 +1979,7 @@
     if (filterOpponents && hasFilter) {
       opponentPool = filteredScenes;
     } else {
-      const ratedOnly = allScenes.filter(s => getSceneRating(s) != null);
+      const ratedOnly = allScenes.filter(s => getRating(s) != null);
       opponentPool = ratedOnly.length >= 1 ? ratedOnly : allScenes;
     }
     totalScenesCount = opponentPool.length;
@@ -1978,61 +1988,10 @@
       return { scenes: await fetchRandomFilteredScenesPair(), ranks: [null, null], isVictory: false, isFalling: false };
     }
 
-    // Handle falling mode - find next opponent BELOW to test against (from full collection)
-    if (gauntletFalling && gauntletFallingScene) {
-      const fallingIndex = opponentPool.findIndex(s => s.id === gauntletFallingScene.id);
-      
-      // Find opponents below (higher index) that haven't been tested
-      const belowOpponents = opponentPool.filter((s, idx) => {
-        if (s.id === gauntletFallingScene.id) return false;
-        if (gauntletDefeated.includes(s.id)) return false;
-        return idx > fallingIndex; // Below in ranking
-      });
-      
-      if (belowOpponents.length === 0) {
-        // Hit the bottom - place 1 below the last opponent that beat them
-        const finalRank = opponentPool.length;
-        const lastDefeatedById = gauntletDefeated[gauntletDefeated.length - 1];
-        const lastOpponent = opponentPool.find(s => s.id === lastDefeatedById);
-        const finalRating = Math.max(RATING_FLOOR, (getSceneRating(lastOpponent) || DEFAULT_RATING) - 1);
-        const newCount = getSceneBattleCount(gauntletFallingScene) + 1;
-        updateSceneRatingAndCount(gauntletFallingScene.id, finalRating, newCount);
-        
-        return {
-          scenes: [gauntletFallingScene],
-          ranks: [finalRank],
-          isVictory: false,
-          isFalling: true,
-          isPlacement: true,
-          placementRank: finalRank,
-          placementRating: finalRating
-        };
-      } else {
-        // Get next opponent below (first one, closest to falling scene)
-        const nextBelow = belowOpponents[0];
-        const nextBelowIndex = opponentPool.findIndex(s => s.id === nextBelow.id);
-        
-        // Update the falling scene's rank for display
-        gauntletChampionRank = fallingIndex + 1;
-        
-        return {
-          scenes: [gauntletFallingScene, nextBelow],
-          ranks: [fallingIndex + 1, nextBelowIndex + 1],
-          isVictory: false,
-          isFalling: true
-        };
-      }
-    }
-
     // If no champion yet, pick from filtered pool to start
     if (!gauntletChampion) {
-      // Reset state
-      gauntletDefeated = [];
-      gauntletFalling = false;
-      gauntletFallingScene = null;
-      
       if (filteredScenes.length < 1) {
-        throw new Error("No scenes match your filter criteria.");
+        throw new Error(`No ${battleTarget} match your filter criteria.`);
       }
       
       // Pick next scene from shuffled filtered pool as challenger (left side - to be rated)
@@ -2040,68 +1999,95 @@
       const challenger = getNextFilteredScene(filteredScenes, filterKey);
       
       if (!challenger) {
-        throw new Error("No scenes match your filter criteria.");
+        throw new Error(`No ${battleTarget} match your filter criteria.`);
       }
+
+      gauntletChampion = challenger;
+      gauntletDefeated = [];
+      gauntletFalling = false;
+      gauntletFallingScene = null;
+      gauntletLow = -1;
+      gauntletHigh = -1;
+    }
+
+    // Build search pool by filtering out the challenger
+    const searchPool = opponentPool.filter(s => s.id !== gauntletChampion.id);
+    
+    // Find challenger's original 0-based index in opponentPool before starting search bounds
+    const startIndex = opponentPool.findIndex(s => s.id === gauntletChampion.id);
+
+    // Initialize search bounds if needed
+    if (gauntletLow === -1 || gauntletHigh === -1) {
+      gauntletLow = 0;
+      gauntletHigh = searchPool.length;
+    }
+
+    console.log(`[Stash Battle] 🔍 Gauntlet Binary Search: low=${gauntletLow}, high=${gauntletHigh}, searchPoolSize=${searchPool.length}, challengerOriginalIndex=${startIndex}`);
+
+    // Check for immediate placement or convergence
+    if (gauntletLow >= gauntletHigh) {
+      const targetIndex = gauntletLow;
+      const placementRank = targetIndex + 1;
+      let placementRating;
+
+      if (startIndex !== -1 && targetIndex === startIndex) {
+        // Original rank is unchanged! Preserve original rating.
+        placementRating = getRating(gauntletChampion) || DEFAULT_RATING;
+        console.log(`[Stash Battle] 🎯 Gauntlet placement converged to starting index (${startIndex}). Preserving original rating: ${placementRating}`);
+      } else {
+        if (targetIndex === 0) {
+          if (searchPool.length > 0) {
+            placementRating = (getRating(searchPool[0]) || DEFAULT_RATING) + 1;
+          } else {
+            placementRating = DEFAULT_RATING;
+          }
+        } else if (targetIndex === searchPool.length) {
+          if (searchPool.length > 0) {
+            placementRating = Math.max(RATING_FLOOR, (getRating(searchPool[searchPool.length - 1]) || DEFAULT_RATING) - 1);
+          } else {
+            placementRating = RATING_FLOOR;
+          }
+        } else {
+          const aboveOpponent = searchPool[targetIndex - 1];
+          const belowOpponent = searchPool[targetIndex];
+          const aboveRating = getRating(aboveOpponent) || DEFAULT_RATING;
+          const belowRating = getRating(belowOpponent) || DEFAULT_RATING;
+          placementRating = Math.round((aboveRating + belowRating) / 2);
+        }
+        console.log(`[Stash Battle] 🎯 Gauntlet placement converged to new index ${targetIndex}. Calculated interpolated rating: ${placementRating}`);
+      }
+
+      // Increment challenger's battle count by 1 upon successful placement
+      const newCount = getBattleCount(gauntletChampion) + 1;
       
-      // Find challenger's position in ranking source (may be filtered or all)
-      const challengerIndex = opponentPool.findIndex(s => s.id === challenger.id);
-      
-      // Start at the bottom - find lowest actually rated scene in opponentPool
-      const { scene: lowestRated, index: lowestIndex } = findLowestRated(opponentPool, challenger.id);
-      
-      // Challenger's current rank in ranking source
-      gauntletChampionRank = challengerIndex >= 0 ? challengerIndex + 1 : opponentPool.length;
-      
-      return { 
-        scenes: [challenger, lowestRated], 
-        ranks: [gauntletChampionRank, lowestIndex + 1],
+      // Update database and local caches
+      await updateSceneRatingAndCount(gauntletChampion.id, placementRating, newCount);
+
+      return {
+        scenes: [gauntletChampion],
+        ranks: [placementRank],
         isVictory: false,
-        isFalling: false
+        isFalling: false,
+        isPlacement: true,
+        placementRank: placementRank,
+        placementRating: placementRating
       };
     }
 
-    // Champion exists - find next opponent from the chosen opponent pool
-    const championIndex = opponentPool.findIndex(s => s.id === gauntletChampion.id);
-    let virtualIndex = championIndex;
-    if (virtualIndex === -1) {
-      const champRating = getSceneRating(gauntletChampion) || DEFAULT_RATING;
-      virtualIndex = opponentPool.findIndex(s => (getSceneRating(s) || 0) < champRating);
-      if (virtualIndex === -1) {
-        virtualIndex = opponentPool.length;
-      }
-    }
-    
-    // Update champion rank (1-indexed, so +1)
-    gauntletChampionRank = virtualIndex + 1;
-    
-    // Find opponents above champion that haven't been defeated
-    const remainingOpponents = opponentPool.filter((s, idx) => {
-      if (s.id === gauntletChampion.id) return false;
-      if (gauntletDefeated.includes(s.id)) return false;
-      // Only scenes ranked higher (lower index) or same rating
-      return idx < virtualIndex || (getSceneRating(s) || 0) >= (getSceneRating(gauntletChampion) || 0);
-    });
-    
-    // If no opponents left, champion has truly won
-    if (remainingOpponents.length === 0) {
-      gauntletChampionRank = 1;
-      return { 
-        scenes: [gauntletChampion], 
-        ranks: [1],
-        isVictory: true,
-        isFalling: false
-      };
-    }
-    
-    // Pick from the closest undefeated opponents above the champion (up to 5)
-    const pickWindow = Math.min(5, remainingOpponents.length);
-    const windowStart = remainingOpponents.length - pickWindow;
-    const nextOpponent = remainingOpponents[windowStart + Math.floor(Math.random() * pickWindow)];
-    const nextOpponentIndex = opponentPool.findIndex(s => s.id === nextOpponent.id);
-    
-    return { 
-      scenes: [gauntletChampion, nextOpponent], 
-      ranks: [virtualIndex + 1, nextOpponentIndex + 1],
+    // Pick midpoint
+    const mid = Math.floor((gauntletLow + gauntletHigh) / 2);
+    const opponent = searchPool[mid];
+
+    // Find the opponent's 1-based rank in the main opponentPool
+    const opponentIndexInPool = opponentPool.findIndex(s => s.id === opponent.id);
+    const opponentRank = opponentIndexInPool !== -1 ? opponentIndexInPool + 1 : mid + 1;
+
+    // The left side card rank badge will display the active search boundary
+    const visualLeftRank = `${gauntletLow + 1}-${gauntletHigh + 1}`;
+
+    return {
+      scenes: [gauntletChampion, opponent],
+      ranks: [visualLeftRank, opponentRank],
       isVictory: false,
       isFalling: false
     };
@@ -2842,18 +2828,21 @@
     // Determine badge for each card (gauntlet and champion modes)
     let leftStreak = null;
     let rightStreak = null;
-    if (currentMode === "gauntlet" || currentMode === "champion") {
-      if (gauntletFalling && gauntletFallingScene) {
-        if (scenes[0].id === gauntletFallingScene.id) {
-          leftStreak = "📍 Finding final placement...";
-        } else if (scenes[1].id === gauntletFallingScene.id) {
-          rightStreak = "📍 Finding final placement...";
+    if (currentMode === "gauntlet") {
+      if (gauntletChampion) {
+        if (scenes[0].id === gauntletChampion.id) {
+          leftStreak = "📍 Finding placement...";
+        } else if (scenes[1].id === gauntletChampion.id) {
+          rightStreak = "📍 Finding placement...";
         }
       }
-      if (gauntletChampion && scenes[0].id === gauntletChampion.id) {
-        leftStreak = gauntletWins;
-      } else if (gauntletChampion && scenes[1].id === gauntletChampion.id) {
-        rightStreak = gauntletWins;
+    } else if (currentMode === "champion") {
+      if (gauntletChampion) {
+        if (scenes[0].id === gauntletChampion.id) {
+          leftStreak = gauntletWins;
+        } else if (scenes[1].id === gauntletChampion.id) {
+          rightStreak = gauntletWins;
+        }
       }
     }
 
@@ -3237,107 +3226,47 @@
     const oldLoserRank = loserIsUnrated ? null : oldLoserInfo.rank;
     const oldLoserTotal = oldLoserInfo.total;
 
-    // Handle gauntlet mode (champion tracking)
+    // Handle gauntlet mode (binary search model)
     if (currentMode === "gauntlet") {
-      
-      // Check if we're in falling mode (finding floor after a loss)
-      if (gauntletFalling && gauntletFallingScene) {
-        console.log(`[Stash Battle] 📊 Falling mode: fallingScene=${gauntletFallingScene.id} winnerId=${winnerId} loserId=${loserId} loserRating=${loserRating}`);
-        if (winnerId === gauntletFallingScene.id) {
-          // Falling scene won - found their floor!
-          // Set their rating to just above the scene they beat
-          const finalRating = loserRating + 1;
-          console.log(`[Stash Battle] 📊 Falling scene found floor: loserRating=${loserRating} → finalRating=${finalRating}`);
-          const newFallingCount = getSceneBattleCount(gauntletFallingScene) + 1;
-          updateSceneRatingAndCount(gauntletFallingScene.id, finalRating, newFallingCount);
-          
-          // Final rank is one above the opponent (we beat them, so we're above them)
-          const opponentRank = loserId === currentPair.left.id ? currentRanks.left : currentRanks.right;
-          const finalRank = Math.max(1, (opponentRank || 1) - 1);
-          
-          // Visual feedback
-          winnerCard.classList.add("pwr-winner");
-          if (loserCard) loserCard.classList.add("pwr-loser");
-          
-          // Show placement screen after brief delay
-          setTimeout(() => {
-            showPlacementScreen(gauntletFallingScene, finalRank, finalRating);
-            saveState();
-          }, 800);
-          return;
-        } else {
-          // Falling scene lost again - keep falling
-          gauntletDefeated.push(winnerId);
-          saveState();
-          
-          // Visual feedback
-          winnerCard.classList.add("pwr-winner");
-          if (loserCard) loserCard.classList.add("pwr-loser");
-          
-          setTimeout(() => {
-            loadNewPair();
-          }, 800);
-          return;
-        }
+      const searchParams = getSearchParams();
+      const sceneFilter = getSceneFilter(searchParams);
+      const hasFilter = sceneFilter || searchParams.has("c") || searchParams.get("q");
+      const cache = getMemoryCache();
+      const allScenes = cache.allScenes || [];
+      const filteredScenes = cache.filteredScenes || allScenes;
+
+      let opponentPool;
+      if (filterOpponents && hasFilter) {
+        opponentPool = filteredScenes;
+      } else {
+        const ratedOnly = allScenes.filter(s => getRating(s) != null);
+        opponentPool = ratedOnly.length >= 1 ? ratedOnly : allScenes;
       }
       
-      // First battle: set champion so handleComparison recognizes the active scene
-      const isFirstBattle = !gauntletChampion;
-      if (isFirstBattle) {
-        gauntletChampion = currentPair.left;
+      const searchPool = opponentPool.filter(s => s.id !== gauntletChampion.id);
+      const mid = Math.floor((gauntletLow + gauntletHigh) / 2);
+
+      if (winnerId === gauntletChampion.id) {
+        // Challenger wins - correct index is <= mid
+        gauntletHigh = mid;
+        console.log(`[Stash Battle] 👍 Challenger won! Adjusting high boundary to ${mid}`);
+      } else {
+        // Challenger loses - correct index is > mid
+        gauntletLow = mid + 1;
+        console.log(`[Stash Battle] 👎 Challenger lost! Adjusting low boundary to ${mid + 1}`);
       }
 
-      // Normal climbing - calculate rating changes (pass loserRank for #1 dethrone)
-      const { newWinnerRating, newLoserRating, winnerChange, loserChange } = handleComparison(
-        winnerId, loserId, winnerRating, loserRating,
-        getSceneBattleCount(winnerScene), getSceneBattleCount(loserScene), loserRank
-      );
-      
-      const newWinnerInfo = getCurrentRankAndTotal(winnerId);
-      const newLoserInfo = getCurrentRankAndTotal(loserId);
-      
-      if (winnerId === gauntletChampion.id) {
-        gauntletDefeated.push(loserId);
-        gauntletWins++;
-        setSceneRating(gauntletChampion, newWinnerRating);
-        console.log(`[Stash Battle] 📊 Gauntlet: champion ${winnerId} won (streak=${gauntletWins}), rating → ${newWinnerRating}`);
-      } else if (isFirstBattle) {
-        gauntletChampion = winnerScene;
-        setSceneRating(gauntletChampion, newWinnerRating);
-        gauntletDefeated = [loserId];
-        gauntletWins = 1;
-        console.log(`[Stash Battle] 📊 Gauntlet: first battle, ${winnerId} becomes champion with rating ${newWinnerRating}`);
-      } else {
-        console.log(`[Stash Battle] 📊 Gauntlet: champion ${gauntletChampion.id}(rating=${getSceneRating(gauntletChampion)}) LOST to ${winnerId}(rating=${newWinnerRating}), entering falling mode`);
-        gauntletFalling = true;
-        gauntletFallingScene = loserScene;
-        gauntletDefeated = [winnerId];
-        
-        gauntletChampion = winnerScene;
-        setSceneRating(gauntletChampion, newWinnerRating);
-        gauntletWins = 1;
-      }
-      
+      gauntletWins++;
       saveState();
-      
-      // Visual feedback with animations
+
+      // Visual feedback: green border on winner, red on loser
       winnerCard.classList.add("pwr-winner");
       if (loserCard) loserCard.classList.add("pwr-loser");
-      
-      showRatingAnimation(winnerCard, winnerRating, newWinnerRating, winnerChange, true,
-        { rank: oldWinnerRank, total: oldWinnerTotal },
-        { rank: newWinnerInfo.rank, total: newWinnerInfo.total }
-      );
-      if (loserCard) {
-        const loserDisplayNew = loserChange !== 0 ? newLoserRating : loserDisplayRating;
-        showRatingAnimation(loserCard, loserDisplayRating, loserDisplayNew, loserChange, false,
-          { rank: oldLoserRank, total: oldLoserTotal },
-          { rank: newLoserInfo.rank, total: newLoserInfo.total }
-        );
-      }
-      
-      // Wait for user keypress or click to load next pair
-      setupDismissListener();
+
+      setTimeout(() => {
+        loadNewPair();
+      }, 800);
+
       return;
     }
 
