@@ -1727,7 +1727,7 @@
     let candidates = [];
     for (let reach = 10; candidates.length === 0 && reach <= opponentPool.length; reach *= 2) {
       for (let i = effectiveScene1Idx - reach; i <= effectiveScene1Idx + reach; i++) {
-        if (i >= 0 && i < opponentPool.length && i !== scene1IdxInPool) {
+        if (i >= 0 && i < opponentPool.length && i !== scene1IdxInPool && opponentPool[i].id !== scene1.id) {
           candidates.push({ scene: opponentPool[i], idx: i });
         }
       }
@@ -1827,6 +1827,10 @@
 
     // Build search pool by filtering out the challenger
     const searchPool = opponentPool.filter(s => s.id !== gauntletChampion.id);
+
+    if (searchPool.length < 1) {
+      throw new Error(`Not enough rated ${battleTarget} for gauntlet comparison. Need at least 1 opponent, but found ${searchPool.length}.`);
+    }
     
     // Find challenger's original 0-based index in opponentPool before starting search bounds
     const startIndex = opponentPool.findIndex(s => s.id === gauntletChampion.id);
@@ -1834,6 +1838,16 @@
     // Initialize search bounds if needed
     if (gauntletLow === -1 || gauntletHigh === -1) {
       gauntletLow = 0;
+      gauntletHigh = searchPool.length;
+    }
+
+    // Clamp bounds to current pool size (pool may have changed during session)
+    if (gauntletLow > searchPool.length) {
+      console.warn(`[Stash Battle] ⚠️ Clamping gauntletLow from ${gauntletLow} to ${searchPool.length}`);
+      gauntletLow = searchPool.length;
+    }
+    if (gauntletHigh > searchPool.length) {
+      console.warn(`[Stash Battle] ⚠️ Clamping gauntletHigh from ${gauntletHigh} to ${searchPool.length}`);
       gauntletHigh = searchPool.length;
     }
 
@@ -2021,7 +2035,7 @@
     let candidates = [];
     for (let reach = 10; candidates.length === 0 && reach <= opponentPool.length; reach *= 2) {
       for (let i = effectiveScene1Idx - reach; i < effectiveScene1Idx; i++) {
-        if (i >= 0 && i < opponentPool.length && i !== scene1IdxInPool) {
+        if (i >= 0 && i < opponentPool.length && i !== scene1IdxInPool && opponentPool[i].id !== scene1.id) {
           candidates.push({ scene: opponentPool[i], idx: i });
         }
       }
