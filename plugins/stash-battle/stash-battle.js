@@ -2156,11 +2156,22 @@
       scene1 = allScenes.find(s => s.id === gauntletChampion.id);
     }
 
-    // If still no LHS (e.g. not opened from a page & no winner yet), pick random from filtered pool
+    // If still no LHS (e.g. not opened from a page & no winner yet), pick random from filtered pool's lowest quartile
     if (!scene1) {
       if (filteredScenes.length > 0) {
-        scene1 = filteredScenes[Math.floor(Math.random() * filteredScenes.length)];
-        console.log(`[Stash Battle] 🎯 No LHS champion/page entity. Picked random LHS: ${scene1.id}`);
+        // Sort copy of filteredScenes descending by rating to ensure lowest quartile is at the end
+        const sortedFiltered = [...filteredScenes].sort((a, b) => {
+          const rA = getRating(a);
+          const rB = getRating(b);
+          if (rA === null && rB === null) return 0;
+          if (rA === null) return 1;
+          if (rB === null) return -1;
+          return rB - rA;
+        });
+        const startIdx = Math.floor(sortedFiltered.length * 0.75);
+        const count = sortedFiltered.length - startIdx;
+        scene1 = sortedFiltered[startIdx + Math.floor(Math.random() * count)];
+        console.log(`[Stash Battle] 🎯 No LHS champion/page entity. Picked random LHS from lowest quartile: ${scene1.id} (rating: ${getRating(scene1)})`);
         resetGauntletState();
         gauntletChampion = scene1;
       } else {
