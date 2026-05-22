@@ -2514,6 +2514,13 @@
       if (loserRank === 1 && !isChampionLoser && !isFallingLoser) {
         loserLoss = 1;
       }
+    } else if (currentMode === "champion") {
+      const winnerRank = currentPair.left && winnerId === currentPair.left.id ? currentRanks.left : currentRanks.right;
+      if (winnerRank === 1) {
+        console.log(`[Stash Battle] 👑 #1 scene won in champion mode. Skipping ELO points change to prevent infinite rise.`);
+        winnerGain = 0;
+        loserLoss = 0;
+      }
     }
     
     const newWinnerRating = Math.max(RATING_FLOOR, winnerRating + winnerGain);
@@ -2532,8 +2539,12 @@
     updateItemInCaches(winnerId, newWinnerRating, newWinnerCount);
     updateItemInCaches(loserId, newLoserRating, newLoserCount);
 
-    updateSceneRatingAndCount(winnerId, newWinnerRating, newWinnerCount);
-    updateSceneRatingAndCount(loserId, newLoserRating, newLoserCount);
+    if (winnerChange !== 0) {
+      updateSceneRatingAndCount(winnerId, newWinnerRating, newWinnerCount);
+    }
+    if (loserChange !== 0) {
+      updateSceneRatingAndCount(loserId, newLoserRating, newLoserCount);
+    }
     
     return { newWinnerRating, newLoserRating, winnerChange, loserChange };
   }
