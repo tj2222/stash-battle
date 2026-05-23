@@ -1,14 +1,10 @@
-!!! Documentation is out of date !!!
-!!! DO NOT BELIEVE STUFF THAT'S IN HERE FOR NOW !!!
-TODO: Update to account for group export, performer support, probably other stuff.
-
 # Stash Battle — Technical Documentation
 
 > For LLM agents and contributors working on the plugin. This documents the nuanced behavior, architecture, and design decisions that aren't obvious from the code alone.
 
 ## ⚠️ Keeping This Document Up To Date
 
-**This file must be updated whenever you change behavior in the plugin.** If you modify rating logic, scene pool filtering, mode behavior, caching, UI components, or any other documented behavior, update the relevant section here in the same changeset.
+**This file must be updated whenever you change behavior in the plugin.** If you modify rating logic, pool filtering, mode behavior, caching, UI components, or any other documented behavior, update the relevant section here in the same changeset.
 
 When adding new features or fixing bugs:
 1. Update any existing sections that are affected by your change
@@ -21,61 +17,83 @@ If you're an LLM agent: read this file before making changes to understand exist
 
 ## Architecture Overview
 
-The plugin is a single IIFE (`stash-battle.js`, ~2600 lines) injected into the Stash UI. It has no build step — just raw JS, a CSS file, and a YAML manifest. It adds a "Battle" button to the `/scenes` page that opens a modal where users compare scenes head-to-head to build rankings via an ELO system.
+The plugin is a single IIFE (`stash-battle.js`, ~3600 lines) injected into the Stash UI. It has no build step — just raw JS, a CSS file, and a YAML manifest. It adds a "Battle" button to `/scenes` and `/performers` pages that opens a modal where users compare items head-to-head to build rankings via an ELO system.
+
+### Target-Neutral Architecture
+
+The plugin operates on two **battle targets**: `"scenes"` and `"performers"`. The active target is determined by the current URL path (`/performers` → performers, everything else → scenes). All matchmaking, caching, and UI logic is target-neutral — functions like `fetchItems()`, `updateItemRatingAndCount()`, and `getAllScenesCached()` operate on whichever target is active via the `battleTarget` variable.
+
+Each target has its own isolated:
+- **Memory cache** (`scenesMemoryCache` / `performersMemoryCache`)
+- **Details cache** (`scenesDetailsCache` / `performersDetailsCache`)
+- **Session pool** (`sessionPools.scenes` / `sessionPools.performers`)
+- **IndexedDB cache keys** (`"all-scenes"` / `"all-performers"`, `"filtered-scenes"` / `"filtered-performers"`)
 
 ### Entry Flow
 
 1. `init()` fires on `DOMContentLoaded`
-2. `addFloatingButton()` injects a nav item on `/scenes` pages
-3. A `MutationObserver` re-adds the button on SPA navigation (Stash uses React Router)
-4. Clicking the button opens `openRankingModal()` which renders the full battle UI
-5. **Scene Page Auto-Initialization**: If the modal is opened while viewing an individual scene page (e.g., `/scenes/<id>`), the plugin captures the active scene's ID. Selecting Gauntlet or Champion modes will automatically start a new run using this scene as the challenger/champion. Even if URL filters exclude it, a rating-based `virtualIndex` places it correctly in the ranked ladder.
+2. `addFloatingButton()` injects a nav item on `/scenes` or `/performers` pages
+3. `PluginApi.Event.addEventListener("stash:location", ...)` re-adds the button on SPA navigation — this is Stash's official event, dispatched from React's `useEffect` in `App.tsx` on every route change. It replaces the old `MutationObserver` approach.
+4. Clicking the button opens `openRankingModal()` which:
+   - Sets `battleTarget` based on the current URL path
+   - Loads persisted mode preference via `loadMode()` (only `currentMode` is persisted)
+   - Always loads a fresh pair — no state is restored from previous sessions
+5. **Item Page Auto-Initialization**: If the modal is opened while viewing an individual item page (e.g., `/scenes/<id>` or `/performers/<id>`), the plugin captures the active item's ID via `getCurrentPageItemId()`. In Gauntlet or Champion modes, this item is used as the initial challenger/champion.
 
-### Core State
+### State Persistence
 
-All state lives in closure-scoped variables (no globals). Key variables:
+Only `currentMode` (`"swiss"`, `"gauntlet"`, or `"champion"`) is persisted via `localStorage` under the key `"stash-battle-mode"`. All other state (current pair, gauntlet progress, filter tracking) is ephemeral — refreshing the page resets it. This was a deliberate simplification to reduce complexity; the previous system persisted ~15 state variables and required filter-change detection, restore-vs-new-pair branching, and storage key management.
+
+### Core State Variables
+
+All state lives in closure-scoped variables (no globals):
 
 | Variable | Purpose |
 |---|---|
-| `currentPair` | `{ left, right }` — the two scenes currently displayed |
+| `battleTarget` | `"scenes"` or `"performers"` — determines which type of item to battle |
+| `currentPair` | `{ left, right }` — the two items currently displayed |
 | `currentRanks` | `{ left, right }` — rank positions for display |
-| `currentMode` | `"swiss"`, `"gauntlet"`, or `"champion"` |
-| `gauntletChampion` | The scene on a winning streak (gauntlet/champion modes) |
+| `currentMode` | `"swiss"`, `"gauntlet"`, or `"champion"` — **only persisted state** |
+| `gauntletChampion` | The item on a winning streak (gauntlet/champion modes) |
 | `gauntletWins` | Current win streak count |
-| `gauntletDefeated` | Array of scene IDs the champion has beaten (prevents rematches) |
-| `gauntletFalling` | Boolean — true when a champion lost and is finding their floor |
-| `gauntletFallingScene` | The scene object currently in falling mode |
+| `gauntletDefeated` | Array of item IDs the champion has beaten (prevents rematches) |
+| `gauntletFalling` | Boolean — true when in gauntlet falling/binary-search mode |
+| `gauntletFallingScene` | The item being placed via binary search |
+| `gauntletLow` / `gauntletHigh` | Binary search bounds (0-indexed into `searchPool`) |
 | `totalScenesCount` | Size of the opponent pool (used for "Rank #X of Y" display) |
+| `openedFromItemId` | Captured when modal opens from an individual item page |
+| `disableChoice` | Prevents double-clicks during animation/transition periods |
 
 ---
 
 ## The Two Sides
 
-The battle UI always shows two scenes:
+The battle UI always shows two items:
 
-- **Left side (scene1)**: Drawn from the **filtered pool** — these are the scenes the user wants to rate. In gauntlet/champion modes, this is the champion.
+- **Left side (scene1)**: Drawn from the **filtered pool** — these are the items the user wants to rate. In gauntlet/champion modes, this is the champion/challenger.
 - **Right side (scene2)**: Drawn from the **opponent pool** — these serve as rated benchmarks for comparison.
 
 This distinction is fundamental to the entire plugin.
 
 ---
 
-## Scene Pools
+## Item Pools
 
 ### `allScenes`
-All scenes in the Stash library, sorted by `rating` DESC via GraphQL. Fetched once and cached aggressively. Includes both rated and unrated scenes.
+All items in the Stash library (scenes or performers, depending on `battleTarget`), sorted by `battle-rating` DESC via `sortByRatingDesc()`. Fetched once and cached aggressively. Includes both rated and unrated items.
 
 ### `filteredScenes`
-Scenes matching the current URL filter parameters (`c`, `q` params). If no filter is active, this equals `allScenes`. Used exclusively for the **left side** — the "scenes to be rated" pool.
+Items matching the current URL filter parameters (`c`, `q` params). If no filter is active, this equals `allScenes`. Used exclusively for the **left side** — the "items to be rated" pool.
 
 ### `opponentPool` (right side)
 Determined per-fetch in each mode function:
 
 ```
-opponentPool = allScenes (rated only)
+ratedOnly = allScenes.filter(s => getRating(s) != null)
+opponentPool = ratedOnly.length >= 1 ? ratedOnly : allScenes
 ```
 
-**Critical behavior**: The opponent pool is always drawn from `allScenes` with unrated scenes **excluded** (filtered to check that the custom ELO rating is not `null` and the battle count is greater than 0). This prevents unrated scenes from appearing as right-side opponents. If no rated scenes exist yet (bootstrap), it falls back to using the full list including unrated.
+**Critical behavior**: The opponent pool prefers rated items only. This prevents unrated items from appearing as right-side opponents. If no rated items exist yet (bootstrap scenario), it falls back to the full list.
 
 ### `totalScenesCount`
 Set from `opponentPool.length` (not `allScenes.length`), so the "Rank #X of Y" display is consistent with the pool the ranks come from.
@@ -84,64 +102,71 @@ Set from `opponentPool.length` (not `allScenes.length`), so the "Rank #X of Y" d
 
 ## Caching Strategy
 
-### Three Layers
+### Two Memory Caches per Target
 
-1. **Memory cache** (`memoryCache` + `detailsCache`) — instant, lives for the session. `memoryCache` stores the minimal scene list; `detailsCache` stores on-demand loaded detailed scene objects.
-2. **IndexedDB** (`stash-battle-cache` DB) — survives page reloads
+Each target (`scenes` / `performers`) has its own isolated memory cache:
+
+```js
+scenesMemoryCache = { allScenes, filteredScenes, filterKey, timestamp }
+performersMemoryCache = { allScenes, filteredScenes, filterKey, timestamp }
+```
+
+`getMemoryCache()` returns the active one based on `battleTarget`.
+
+### Three Cache Layers
+
+1. **Memory cache** (`getMemoryCache()` + `getDetailsCache()`) — instant, lives for the page session. `memoryCache` stores minimal item lists; `detailsCache` (a `Map`) stores on-demand loaded detailed item objects.
+2. **IndexedDB** (`stash-battle-cache` DB) — survives page reloads. Uses target-specific keys: `"all-scenes"` / `"all-performers"`, `"filtered-scenes"` / `"filtered-performers"`.
 3. **Network** (GraphQL) — source of truth, slowest
 
 ### Stale-While-Revalidate
 
-On cache hit, the data is returned immediately. If the cache is older than `CACHE_MAX_AGE_MS` (5 minutes), a background refresh is kicked off (not awaited) to update the cache for next time.
-
-### Cache Keys
-
-- `"all-scenes"` — all scenes, no filter
-- `"filtered-scenes"` — single slot for filtered scenes (overwrites on filter change to prevent IndexedDB bloat)
+On cache hit, data is returned immediately. If older than `CACHE_MAX_AGE_MS` (5 minutes), a background refresh fires (not awaited) to update caches for next time.
 
 ### `filterKey`
 
-A JSON string of the current filter parameters. Stored alongside the filtered cache to detect when the filter has changed and the cache is stale.
+A JSON string of the current filter parameters (both `q` and `c` params). Stored alongside the filtered cache to detect when the filter has changed and the cache should be invalidated.
 
 ---
 
-## Lazy-Loading Scene Details
+## Lazy-Loading Item Details
 
-To support extremely large Stash libraries (160k+ scenes), the plugin implements an optimized **lazy-loading minimal data architecture**. 
+To support extremely large libraries (160k+ items), the plugin uses a minimal-data architecture:
 
-### 1. Scene Fragments Division
-- **`MINIMAL_SCENE_FRAGMENT`**: Requests only `id` and `custom_fields` (Elo `battle-rating` and `battle-count`). This completely avoids expensive SQL database joins (studios, performers, tags, files) during startup, allowing bootstrap loading to complete in under **~500ms** even for 160k scenes.
-- **`FULL_SCENE_FRAGMENT`**: Requests all rich visual metadata (screenshot paths, duration, studio, performers, tags, play count) required for rendering cards.
+### 1. Fragment Division
+- **`MINIMAL_SCENE_FRAGMENT`** / **`MINIMAL_PERFORMER_FRAGMENT`**: Only `id` and `custom_fields`. Avoids expensive SQL joins during startup.
+- **`FULL_SCENE_FRAGMENT`** / **`FULL_PERFORMER_FRAGMENT`**: All rich visual metadata (screenshot/image paths, duration, studio, performers/scenes, tags, play count) for rendering cards.
 
-### 2. On-Demand Fetching & Hydration
-When a comparison pair `scenes[0]` and `scenes[1]` is chosen for a matchup, they are loaded with minimal fields. Before rendering, `loadNewPair()` triggers `fetchSceneDetails(id)` in parallel to retrieve the full metadata. 
+### 2. On-Demand Hydration
+When a pair is chosen, `loadNewPair()` calls `fetchItemDetails(id)` in parallel for both items to retrieve full metadata before rendering.
 
 ### 3. Progressive Pre-Fetching
-To eliminate loading delay between matchups:
-- **Left-Side Scene Pre-fetching**: In Swiss mode, the *next* left-side scene is deterministic (the next index in `shuffledFilteredScenes`). The plugin proactively pre-fetches and caches this scene's details in the background while the user compares the current pair. In Gauntlet/Champion modes, the active champion is already fully loaded and cached in memory.
-- **Opponent On-Demand Shimmers**: Since opponents are chosen randomly from a pool, they are queried on-demand. These queries typically execute in under ~10-20ms. Elegant **CSS shimmer placeholders** are rendered on the cards during this brief interval for a premium, responsive feel.
+- **Left-Side Pre-fetching**: In Swiss mode, the next left-side item is deterministic (next index in `shuffledFiltered`). The plugin pre-fetches its details in the background via `triggerPrefetch()`.
+- **Shimmer Placeholders**: During the brief detail-loading interval, CSS shimmer placeholders are shown for a premium feel.
 
-### 4. Details Cache Syncing
-When a battle completes and ELO rating is updated, `updateSceneInCache()` modifies the Elo values in `allScenes`, `filteredScenes`, and `detailsCache` simultaneously. This prevents display of stale ratings if a scene appears again in the same session.
+### 4. Image Decode API
+After rendering card HTML, `img.decode()` is called on all images to decode them off-main-thread. Images start at `opacity: 0` and fade in after decoding, preventing frame drops from large JPEG screenshots.
+
+### 5. Cache Syncing
+When ELO rating is updated, `updateItemInCaches()` modifies ratings in `allScenes`, `filteredScenes`, and `detailsCache` simultaneously, and calls `repositionItemInArray()` to maintain correct sort order.
 
 ---
 
 ## Configuration & Rating Reset Panel
 
-The plugin includes a dedicated configuration screen that allows users to manage preferences and metadata state directly from the Stash UI.
+### UI Transition
+- **⚙️ Config Button**: In the modal's action footer.
+- **Stateless DOM Swap**: Renders config panel inside `#pwr-comparison-area`, hiding action buttons.
+- **"Back to Battle"**: Restores actions and calls `loadNewPair()`.
 
-### 1. UI Transition Model
-- **⚙️ Config Button**: Injected into the modal's action footer to the right of the "Refresh Cache" button.
-- **Stateless DOM Swap**: Clicking "Config" hides the standard action buttons (`.pwr-actions`) and game status headers, rendering the config panel inside `#pwr-comparison-area`.
-- **"Back to Battle"**: Renders a back button that restores actions and calls `loadNewPair()` to dynamically rebuild and hydrate the current comparison matchup card layout.
+### Bulk Rating Destruction
+- **GraphQL Aliased Batching**: Combines 50 aliased mutations per HTTP request for bulk resets.
+- **Safety Safeguard**: Glassmorphic confirmation dialog before destruction.
+- **Progress Tracking**: Real-time progress bar during execution.
+- **Cache Invalidation**: All caches cleared after completion.
 
-### 2. High-Performance Bulk Rating Destruction
-Resetting ratings requires clearing custom field values (`battle-rating` and `battle-count`) in Stash's database for all scenes that have them. To achieve maximum performance and reliability:
-- **GraphQL Aliased Batching**: Instead of executing sequential HTTP requests, Stash Battle constructs bulk GraphQL mutation strings by combining **50 aliased operations into a single HTTP request** (e.g. `update_0: sceneUpdate(...) { id } update_1: sceneUpdate(...) { id }`).
-- **Network Load Reduction**: By batching mutations 50 at a time, network roundtrip and transaction overhead are reduced by exactly 98%.
-- **Safety Safeguard**: When clicking "Reset All Ratings", a premium glassmorphic overlay dialog interrupts the user: `"Are you sure you want to DESTROY the ratings of all $n rated scenes?"` with "Cancel" and "Destroy" options.
-- **Progress Tracking**: During execution, the Config Panel shows a real-time progress bar (e.g. `"Destroying ratings: 50 / 320 (16%)"`), preventing any background clicks.
-- **Synchronous Cache Invalidation**: Once execution finishes, all in-memory caches, details caches, IndexedDB, and game states are synchronous-cleared, automatically re-fetching fresh data from Stash.
+### Rankings Sync (Group Export)
+The plugin supports exporting current rankings as a Stash **Group** via `executeRankingsSync()`. Items are added to the group in rank order, allowing users to browse their rankings as a standard Stash group/playlist.
 
 ---
 
@@ -149,29 +174,29 @@ Resetting ratings requires clearing custom field values (`battle-rating` and `ba
 
 ### Shuffled Traversal
 
-Filtered scenes are shuffled (Fisher-Yates) and traversed sequentially via `shuffleIndex`. This ensures every scene is shown once before any repeat. The shuffle is invalidated when the filter changes (`shuffleFilterKey` check).
+Filtered items are shuffled (Fisher-Yates) and traversed sequentially via `shuffleIndex`. This ensures every item is shown once before any repeat. The shuffle is invalidated when the filter changes (`shuffleFilterKey` check).
 
-### `removedSceneIds`
+### `removedIds`
 
-A `Set` tracking scenes that have been processed this session. This survives background cache refreshes (which could re-add scenes to the memory cache). Scenes are removed from the filtered pool after each battle via `removeFromFilteredPool()`.
+A `Set` per target (in `sessionPools`) tracking items processed this session. Survives background cache refreshes (which could re-add items to memory cache). Items are removed from the filtered pool after each battle via `removeFromFilteredPool()`.
 
 ### Pool Exhaustion
 
-When all filtered scenes have been processed (`getNextFilteredScene` returns `null`):
+When all filtered items have been processed (`getNextFilteredScene` returns `null`):
 1. Clear filtered cache (memory + IndexedDB)
-2. Reset shuffle state and `removedSceneIds`
+2. Reset shuffle state and `removedIds`
 3. Re-fetch from network
-4. Retry — picks up newly-qualifying scenes (e.g., a scene that was just rated into the filter range)
+4. Retry — picks up newly-qualifying items
 
 ---
 
 ## Rating / ELO System
 
 ### Scale
-Ratings are standard chess-style Elo points. Clamped with a rating floor of **100** and no ceiling.
+Standard chess-style Elo points. Clamped with a floor of **100** (`RATING_FLOOR`) and no ceiling.
 
-### Unrated Scenes
-Unrated scenes start with a default rating of **1500** (`DEFAULT_RATING`). In the UI, they display as `"Unrated"` until their first battle. In Swiss matchmaking, unrated scenes are paired against opponents close to `1500` to find their true ranking quickly.
+### Unrated Items
+Start with `DEFAULT_RATING` of **1500**. Display as `"Unrated"` until their first battle. In Swiss matchmaking, unrated items are positioned where 1500 would sit in the opponent pool.
 
 ### ELO Formula
 
@@ -185,15 +210,15 @@ expectedLoser = 1 / (1 + 10^(ratingDiffLoser / 400))
 loserLoss = max(1, round(loserK * expectedLoser))
 ```
 
-The divisor of 400 represents standard chess Elo calculations.
+Rating defaults use `??` (nullish coalescing) so that a rating of 0 is treated as valid, not as "missing".
 
 ### K-Factor (Dynamic)
 
-Based on the scene's `battleCount` — newer scenes have higher K-factors for high volatility, while established ones stabilize:
+Based on `battleCount` — newer items have higher K-factors:
 
 | Battle Count | K-Factor | Category |
 |---|---|---|
-| < 8 | 48 | New / Provisional — extremely volatile |
+| < 8 | 48 | Provisional — extremely volatile |
 | 8 to 15 | 32 | Settling — moderate changes |
 | 16 to 30 | 24 | Established — smaller changes |
 | ≥ 31 | 16 | Very established — highly stable |
@@ -202,9 +227,9 @@ Based on the scene's `battleCount` — newer scenes have higher K-factors for hi
 
 **Swiss mode**: True ELO — both sides get rating changes based on their respective K-factors.
 
-**Gauntlet/Champion modes**: Only the **active scene** (champion or falling scene) gets rating changes. Defenders are benchmarks — their ratings stay the same. Exception: if the defender is **rank #1** and loses, they drop by 1 point (dethrone mechanic).
+**Gauntlet mode**: Only the **active scene** (champion or falling scene) gets rating changes. Defenders are benchmarks — their ratings stay the same. Exception: if the defender is **rank #1** and loses, they drop by 1 point (dethrone mechanic).
 
-**Champion mode loss**: When the champion loses, their rating is **preserved** — they earned it through wins. They just get replaced by the new champion. No ELO penalty.
+**Champion mode**: Both sides get standard ELO changes. Exception: if the **#1-ranked item wins**, both sides get 0 change — prevents infinite rating inflation for an already-dominant item.
 
 ---
 
@@ -212,131 +237,132 @@ Based on the scene's `battleCount` — newer scenes have higher K-factors for hi
 
 ### Swiss Mode
 
-The default mode. Pairs scenes with similar ratings for meaningful comparisons.
+The default mode. Pairs items with similar ratings for meaningful comparisons.
 
 **Pairing logic**:
-1. Pick the next scene from the shuffled filtered pool (left side)
+1. Pick the next item from the shuffled filtered pool (left side)
 2. Find its position in the opponent pool (sorted by rating DESC)
-3. If the scene isn't in the opponent pool (unrated), position it where `DEFAULT_RATING` (`1500`) would sit in the opponent pool.
-4. Collect candidates within ±10 of that position
+3. If the item isn't in the opponent pool (unrated), position it where `DEFAULT_RATING` (1500) would sit
+4. Collect candidates within ±10 of that position, excluding any item with the same ID as scene1 (self-match guard)
 5. If no candidates found, **expand the search** (double the reach) until candidates exist
 6. Pick randomly from candidates
 
-**After battle**: Both scenes are removed from the filtered pool. Both get ELO updates.
+**After battle**: Both items are removed from the filtered pool. Both get ELO updates.
 
-### Gauntlet Mode
+### Gauntlet Mode (Binary Search)
 
-A climb-the-ladder mode where a challenger fights their way up from the bottom.
+A ranking-placement mode where a challenger's position is determined via binary search against the rated ladder.
 
-**Initial pairing**:
-1. Pick a scene from the filtered pool as the challenger (left side)
-2. Find the **lowest actually rated** scene in the opponent pool (`findLowestRated` — explicitly skips unrated)
-3. Display: challenger vs lowest rated
+**Initial setup**:
+1. Pick an item from the filtered pool as the challenger
+2. If opened from an individual item page, that item becomes the challenger
+3. Build `searchPool` = opponent pool minus the challenger
+4. Initialize binary search bounds: `gauntletLow = 0`, `gauntletHigh = searchPool.length`
 
-**First battle special handling**:
-- `gauntletChampion` is set to the left-side scene **before** `handleComparison` runs, so the first battle properly calculates ELO
-- If the right side wins on the first battle, it simply becomes champion — **no falling mode** is triggered
+**Binary search iteration**:
+1. Compute midpoint with up to 10% range jitter: `mid = floor((low + high) / 2) + offset`
+2. Present: challenger vs `searchPool[mid]`
+3. If challenger wins (beats the opponent): `gauntletHigh = mid` (correct rank is ≤ mid)
+4. If challenger loses: `gauntletLow = mid + 1` (correct rank is > mid)
+5. Continue until `gauntletLow >= gauntletHigh` — placement is found
 
-**Climbing**:
-- Champion wins → opponent added to `gauntletDefeated`, streak increments, champion's rating increases via ELO
-- Next opponent: picked randomly from up to 5 of the closest undefeated scenes ranked above the champion (`remainingOpponents` filtered by `idx < championIndex` or `rating >= champion's rating`). This selection window prevents every climb from fighting the exact same sequence of opponents.
-- As champion wins and their rating increases, `repositionSceneInArray` moves them up in the sorted pool. The champion can leapfrog multiple opponents if their ELO gain is large enough — skipped opponents are excluded from future matchups since they now rank below the champion
+**Placement convergence**:
+- Target index = `gauntletLow`
+- If target index equals the challenger's original index → preserve original rating
+- Otherwise, interpolate rating from neighbors above and below the target index
+- Special cases for index 0 (above everyone) and last index (below everyone)
+- Increment battle count by 1 and update database
 
-**Champion loses → Falling mode**:
-- The old champion becomes `gauntletFallingScene`
-- The winner becomes the new `gauntletChampion`
-- Falling scene faces opponents **below** it in the ranking to find its floor
+**Bounds clamping**: After initialization, bounds are clamped to `[0, searchPool.length]` to handle pool size changes during a session (e.g., background cache refresh changes the rated item count).
 
-**Falling mode outcomes**:
-- Falling scene **wins**: Found their floor. Rating set to `loserRating + 1`. Placement screen shown.
-- Falling scene **loses**: Keep falling. Winner added to `gauntletDefeated`.
-- **Hits the bottom** (no opponents below): Rating set to `max(RATING_FLOOR, lastOpponent.rating - 1)` — one below whatever beat them last.
-
-**Victory**: When `remainingOpponents` is empty, the champion has conquered all scenes. Victory screen shown.
+**Victory screen**: Not applicable in gauntlet — the mode always ends with a placement screen showing final rank and rating.
 
 ### Champion Mode
 
-Like gauntlet but simpler — winner always takes over, no falling.
+King-of-the-hill mode where the winner stays on as champion.
 
 **Key differences from Gauntlet**:
-- When champion loses, they keep their earned rating (no ELO penalty)
-- Winner becomes new champion immediately
-- No falling mode — the old champion just gets replaced
-- Otherwise identical pairing and climbing logic
+- No binary search — uses Swiss-style pairing against higher-rated opponents (candidates above the champion only)
+- Both sides get standard ELO changes (exception: #1 winner gets 0 change)
+- When champion loses, the winner becomes new champion; old champion keeps their earned rating
+- Victory is achieved when the champion reaches **rank #1** in the opponent pool
+- Self-match guard prevents the champion from being matched against themselves
 
 ---
 
 ## UI Behavior
 
-### Scene Cards
+### Item Cards
 
-Each card shows: screenshot (with hover video preview), title, duration, rank, studio, performers, play count, current rating, tags, and a "Choose This Scene" button.
+Cards are rendered by `createSceneCard()` (for scenes) and `createPerformerCard()` (for performers). Each shows target-specific information:
 
-Clicking the **screenshot/thumbnail** opens the scene in a new tab, allowing users to inspect the scene without losing their place in the battle.
+**Scene cards**: Screenshot (with hover video preview), title, duration, rank, studio, performers, play count, rating, tags, and a "Choose This Scene" button.
 
-**Badges** (displayed over the screenshot):
-- Win streak: `🔥 X wins` (number)
-- Falling mode: `📍 Finding placement...` (string)
-- The badge slot accepts either type via the `streak` parameter on `createSceneCard`
+**Performer cards**: Primary image (with gallery thumbnail hover), name, scene count, rank, rating, tags, and a "Choose This Performer" button. Gallery thumbnails are shown below the main image and swap the main image on hover.
 
-**Provisional indicator**: Displays a question mark `?` after the rating (e.g. `1548?`) if a scene has under 8 battles. Unrated scenes (0 battles) display as `"Unrated"`.
+**Badges** (displayed over the image):
+- Win streak: `🔥 X wins`
+- Binary search placement: `📍 Finding placement...`
+
+**Provisional indicator**: Displays `?` after the rating (e.g. `1548?`) if an item has under 8 battles. Unrated items display as `"Unrated"`.
 
 ### Rating Animations
 
-After each battle, an overlay animates the rating change:
-- Green with `+X` for the winner
-- Red with `-X` for the loser
-- Count-up/count-down animation runs dynamically over a fixed 800ms window, adjusting step count and tick speed depending on the magnitude of the Elo change so that large updates or minor changes complete synchronously.
-- Overlay removed after 1400ms, then new pair loads
+After each battle, an overlay animates the rating and rank changes:
+- Green overlay with `+X` for the winner, red with `-X` for the loser
+- Both rating and rank count-up/count-down in a single `requestAnimationFrame` loop over 800ms with linear interpolation
+- Overlay dismissed on any click or keypress, then new pair loads
 
-### Victory / Placement Screens
+### End Screens
 
-- **Victory**: Crown icon, "CHAMPION!", scene info, streak stats
-- **Placement**: Pin icon, "PLACED!", final rank and rating
-- Both show a "Start New Run" button that resets gauntlet state
+Victory and placement screens are rendered by a shared `createEndScreen()` function that takes a config object:
+- **Victory** (`createVictoryScreen`): 👑 icon, "CHAMPION!", streak stats, "Start New Gauntlet" button
+- **Placement** (`showPlacementScreen`): 📍 icon, "PLACED!", final rank/rating, "Start New Run" button
+
+Both use shared `getItemTitle()` and `getItemImageHtml()` helpers for target-neutral display.
 
 ### Keyboard Shortcuts
 
 | Key | Action |
 |---|---|
 | Escape | Close modal |
-| Left Arrow | Choose left scene |
-| Right Arrow | Choose right scene |
-| Space | Skip (disabled during gauntlet/champion with active champion) |
-
----
-
-## State Persistence
-
-State is saved to `localStorage` under `"stash-battle-state"` after every battle and on certain mode changes. Restored on modal open.
-
-**Saved fields**: `currentPair`, `currentRanks`, `currentMode`, `gauntletChampion`, `gauntletWins`, `gauntletChampionRank`, `gauntletDefeated`, `gauntletFalling`, `gauntletFallingScene`, `totalScenesCount`, `savedFilterParams`.
-
-**Filter change detection**: `savedFilterParams` stores the URL search string. If it differs on modal open, gauntlet state and caches are reset.
-
----
-
-## URL Filter Integration
-
-The plugin reads Stash's URL filter parameters to determine which scenes to show:
-
-- **`q`** parameter: text search query
-- **`c`** parameters: structured criteria (JSON-encoded with `()` instead of `{}`)
-- **`sortby`** / **`sortdir`**: sort options (default: `rating` DESC)
-
-`getSceneFilter()` parses these into a GraphQL `SceneFilterType`. Supported criterion types: boolean, stringEnum, multi, hierarchicalMulti, resolution, orientation, duplicated, and standard numeric/string comparisons.
+| Left Arrow | Choose left item |
+| Right Arrow | Choose right item |
+| Space | Skip (disabled during gauntlet with active champion) |
 
 ---
 
 ## GraphQL Integration
 
-All data comes from Stash's GraphQL API:
+All data comes from Stash's GraphQL API via `graphqlQuery()`:
 
-- **`findScenes`** query: fetches minimal scene list with `per_page: -1` using the `MINIMAL_SCENE_FRAGMENT`.
-- **`findScene`** query (details lookup): fetches complete detailed metadata for a single scene using `FULL_SCENE_FRAGMENT` on-demand.
-- **`sceneUpdate`** mutation: writes rating changes back to Stash
-- **`MINIMAL_SCENE_FRAGMENT` fields**: `id`, `custom_fields`
-- **`FULL_SCENE_FRAGMENT` fields**: `id`, `title`, `date`, `custom_fields`, `play_count`, `paths` (screenshot, preview), `files` (path, duration), `studio`, `performers`, `tags`
+### Retry Mechanism
+`graphqlQuery()` includes a single retry with 1-second delay for transient `TypeError` network errors (e.g., `Failed to fetch`). This handles brief connectivity interruptions without adding strict timeouts — legitimate queries for large libraries can take 15-45 seconds.
+
+### Queries and Mutations
+- **`findScenes`** / **`findPerformers`**: Fetches minimal item lists with `per_page: -1`
+- **`findScene`** / **`findPerformer`**: Fetches full details for individual items on-demand
+- **`sceneUpdate`** / **`performerUpdate`**: Writes rating changes back to Stash. Uses a template-based mutation that derives type name from `battleTarget` (e.g., `Scene` → `sceneUpdate`, `Performer` → `performerUpdate`).
+- **Bulk mutations** (rating destruction): Aliased batching of 50 mutations per HTTP request
+
+### Custom Fields
+Ratings are stored in Stash's `custom_fields` system:
+- `battle-rating`: The ELO rating (number)
+- `battle-count`: Number of battles fought (number)
+
+Updates use `custom_fields: { partial: { ... } }` to avoid overwriting other custom fields.
+
+---
+
+## URL Filter Integration
+
+The plugin reads Stash's URL filter parameters:
+
+- **`q`** parameter: text search query
+- **`c`** parameters: structured criteria (JSON-encoded with `()` instead of `{}`)
+- **`sortby`** / **`sortdir`**: sort options (default: `rating` DESC)
+
+`getItemFilter()` parses these into a GraphQL filter type. Supported criterion types: boolean, stringEnum, multi, hierarchicalMulti, resolution, orientation, duplicated, and standard numeric/string comparisons.
 
 ---
 
@@ -344,16 +370,24 @@ All data comes from Stash's GraphQL API:
 
 1. **First gauntlet battle ELO**: `gauntletChampion` must be set *before* `handleComparison` runs, otherwise all role checks evaluate to false and no ELO change occurs.
 
-2. **First battle right-side win**: If the user picks the right side on the first gauntlet battle, it should become champion without triggering falling mode. The `isFirstBattle` flag handles this.
+2. **Unrated in opponent pool**: Without the rated-only filter, unrated items cluster at the bottom of the DESC-sorted list. Swiss mode's ±10 reach around an unrated left-side item would pick other unrated items as opponents — defeating the purpose.
 
-3. **Unrated in opponent pool**: Without the rated-only filter, unrated scenes cluster at the bottom of the DESC-sorted list. Swiss mode's ±10 reach around an unrated left-side scene would pick other unrated scenes as opponents — defeating the purpose.
+3. **Self-match guard**: Both Swiss and Champion modes include `opponentPool[i].id !== scene1.id` checks in candidate selection to prevent the same item from appearing on both sides, even if index-based exclusion fails (e.g., item not in pool).
 
-4. **Falling scene at the bottom**: If the falling scene was already the lowest-rated scene (e.g., it was picked as the initial gauntlet opponent and later became champion), `belowOpponents` is immediately empty. The rating is set to 1 below the last opponent's rating rather than hardcoded to 1.
+4. **Gauntlet bounds clamping**: After initializing binary search bounds, they're clamped to `[0, searchPool.length]`. This handles the case where a background cache refresh changes the pool size mid-session, which could otherwise cause out-of-bounds array access.
 
-5. **Champion loss in champion mode**: The champion keeps their rating when they lose — no ELO penalty. The `isFallingLoser` check (not `isChampionLoser`) controls this.
+5. **Gauntlet searchPool minimum**: After filtering out the champion from the opponent pool, the code validates `searchPool.length >= 1`. This prevents entering binary search with an empty pool.
 
-6. **`repositionSceneInArray`**: After a rating change, the scene is physically moved in the sorted array to maintain correct rankings. This means `findIndex` lookups against the opponent pool always reflect the latest ratings.
+6. **Champion mode #1 winner**: When the #1-ranked item wins in champion mode, both sides get 0 ELO change. Without this, the top item's rating would inflate infinitely since it keeps winning.
 
-7. **Background refresh race condition**: `removedSceneIds` persists across background cache refreshes. Without it, a background refresh could re-add scenes to the filtered pool that were already processed this session.
+7. **`repositionItemInArray`**: After a rating change, the item is physically moved in the sorted array to maintain correct rankings. This means `findIndex` lookups against the opponent pool always reflect the latest ratings.
 
-8. **Pool size for rank display**: `totalScenesCount` is set from `opponentPool.length`, not `allScenes.length`. This ensures "Rank #X of Y" is consistent when unrated scenes are excluded from the pool.
+8. **Background refresh race condition**: `removedIds` (per-target `Set` in `sessionPools`) persists across background cache refreshes. Without it, a background refresh could re-add items to the filtered pool that were already processed this session.
+
+9. **Pool size for rank display**: `totalScenesCount` is set from `opponentPool.length`, not `allScenes.length`. This ensures "Rank #X of Y" is consistent when unrated items are excluded.
+
+10. **Rating defaults with `??`**: `handleComparison` uses `??` (nullish coalescing) instead of `||` for rating defaults. This is semantically correct because a rating of `0` should be treated as a valid value, not as "missing".
+
+11. **PluginApi availability**: The `PluginApi.Event` API is available on `window.PluginApi` (set by Stash's React app at boot). The plugin uses it directly without fallback — it requires a modern Stash version that supports the PluginApi.
+
+12. **GraphQL retry scope**: Only `TypeError` (network-level) errors trigger retry. GraphQL-level errors (e.g., validation errors from Stash) are thrown immediately without retry, since those indicate a logic problem rather than a transient issue.
